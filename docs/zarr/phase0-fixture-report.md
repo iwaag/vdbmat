@@ -1,7 +1,9 @@
 # Phase 0 Zarr Fixture Report
 
-**Date:** 2026-06-28  
-**Environment:** CPython 3.11.14, Zarr 3.1.6, NumPy 2.4.3  
+**Date:** 2026-06-28
+
+**Environment:** CPython 3.11.14, Zarr 3.1.6, NumPy 2.4.6
+
 **Layout:** Zarr format 3 directory store, Blosc/Zstandard level 5, bit shuffle
 
 The report was generated with:
@@ -32,4 +34,3 @@ All arrays use at most `(2, 2, 2)` spatial chunks and keep the complete RGB basi
 material axis in one chunk. Metadata-only inspection was verified without invoking
 array payload access. Production chunk selection and remote-store transactional
 behavior remain deferred.
-

@@ -4,10 +4,31 @@ VBDMAT is a renderer-independent preprocessing backend for voxel-based
 material-jetting appearance research. The project will convert material voxel
 data into explicit optical-property volumes for downstream renderers.
 
-The repository is currently in Phase 0. This phase establishes volume schemas,
-physical conventions, persistence, and renderer interoperability proofs. It
-does not yet provide calibrated appearance prediction or production CAD
-voxelization.
+Phase 0 is complete: it establishes volume schemas, physical conventions,
+persistence, and renderer interoperability proofs. The
+[feasibility report](docs/phase0-feasibility-report.md) recommends proceeding to
+Phase 1 without revising those foundations.
+
+## Architecture
+
+```text
+material labels/mixtures -> optical mapping -> canonical optical volume -> Zarr
+                                                   |                 |
+                                                   v                 v
+                                           Mitsuba adapter    OpenVDB/Cycles adapter
+```
+
+Core volume types define renderer-independent arrays, geometry, units, basis metadata,
+and provenance. Optical mapping, storage, boundary derivation, and renderer adapters
+are separate modules. Optional renderer dependencies are loaded only within exporters.
+
+## Non-goals
+
+The current project does not provide calibrated appearance prediction, production CAD
+voxelization, printer input support, droplet/curing/process simulation, spectral
+transport, large-volume optimization, GPU acceleration, production renderer plugins,
+or a GUI. Proof images validate integration and gross trends, not physical equivalence
+between renderers.
 
 ## Requirements
 
@@ -52,6 +73,21 @@ uv sync --locked --group openvdb
 The OpenVDB group is empty because compatible Python bindings and Blender are
 provided by the isolated integration container documented in
 [the OpenVDB/Cycles proof](docs/openvdb/phase0-cycles-proof.md).
+
+## Fixture demo
+
+Run the complete renderer-independent fixture path:
+
+```bash
+uv run python examples/phase0/inspect_synthetic_fixtures.py
+uv run python examples/phase0/map_synthetic_fixtures.py
+uv run python examples/phase0/zarr_fixture_report.py
+uv run python examples/phase0/check_cross_consumer_conformance.py \
+  .local/phase0/conformance.json
+```
+
+The six deterministic fixtures cover homogeneous media, a sharp interface, layered
+materials, a mixture ramp, and anisotropic XYZ axis markers.
 
 ## Current package
 
@@ -147,6 +183,21 @@ uv run --group mitsuba python examples/phase0/render_mitsuba_fixtures.py \
 Each fixture directory contains EXR/PNG output, oriented boundary PLY files, a scene
 summary, and a machine-readable capability report.
 
+Build and verify the isolated OpenVDB/Blender Cycles proof:
+
+```bash
+docker build -t vbdmat-phase0-step10:blender4.5.11 \
+  -f tools/phase0/Dockerfile.openvdb-cycles .
+docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp \
+  -e PYTHONPATH=/work/src -v "$PWD:/work" -w /work \
+  vbdmat-phase0-step10:blender4.5.11 \
+  python3 -m pytest -q tests/integration/test_openvdb.py \
+  tests/integration/test_blender_cycles.py
+```
+
+Export and headless-render commands are in the
+[OpenVDB/Cycles proof](docs/openvdb/phase0-cycles-proof.md).
+
 Run the renderer-independent cross-consumer contract check for every fixture:
 
 ```bash
@@ -173,6 +224,7 @@ pixels for physical equality. See
 - [Phase 0 Mitsuba consumer proof](docs/mitsuba/phase0-proof.md)
 - [Phase 0 OpenVDB/Cycles consumer proof](docs/openvdb/phase0-cycles-proof.md)
 - [Phase 0 cross-consumer conformance](docs/conformance/phase0-cross-consumer.md)
+- [Phase 0 feasibility report](docs/phase0-feasibility-report.md)
 
 ## License
 
