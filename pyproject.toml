@@ -30,6 +30,8 @@ addopts = ["-ra", "--strict-config", "--strict-markers"]
 testpaths = ["tests"]
 markers = [
     "mitsuba: optional tests requiring the locked Mitsuba dependency group",
+    "openvdb: optional tests requiring compatible OpenVDB Python bindings",
+    "blender: optional tests requiring the Blender executable",
 ]
 
 [tool.mypy]

@@ -77,6 +77,27 @@ visualization `clip((1 - radiance) * 128, 0, 1)` to expose small attenuation dif
 this diagnostic image is not a replacement for the linear result and does not alter the
 renderer inputs.
 
+## OpenVDB / Blender Cycles mapping selected for Phase 0
+
+- Canonical ZYX arrays are transposed to XYZ before OpenVDB `copyFromArray`; all
+  exported grids are named `FloatGrid` values with a shared cell-centred affine.
+- The affine retains anisotropic voxel dimensions, canonical rigid transform, and
+  metre units. OpenVDB's row-vector matrix is the transpose of the canonical
+  column-vector representation.
+- The six RGB coefficient components, spatial `g`, and spatial `ior` are preserved as
+  separate grids. Two additional scalar grids contain the explicit equal-weight RGB
+  reductions used by the Cycles proof.
+- Cycles Volume Absorption and Volume Scatter density inputs consume those derived
+  scalar grids. This is reported as an approximation rather than a reinterpretation
+  of the canonical RGB values.
+- Cycles receives one scattering-weighted global anisotropy value. The spatial `g`
+  grid remains in the artifact and is reported approximated.
+- Spatial `ior` remains in the artifact but is unsupported by the selected Cycles
+  volume path. Internal derived IOR interfaces are also unsupported; the adapter does
+  not silently create index-matched or misleading surfaces.
+- The Blender scene script fixes engine, CPU device, camera, light, resolution,
+  samples, random seed, bounce limit, unit scale, and output format.
+
 ## Consequences
 
 - Core code and persistence stay renderer independent.
