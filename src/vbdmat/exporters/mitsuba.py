@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import importlib
 import json
 import math
 from collections import defaultdict
@@ -408,7 +409,7 @@ def render_mitsuba(
 
 def _load_mitsuba(variant: str) -> ModuleType:
     try:
-        import mitsuba as mi
+        mi = importlib.import_module("mitsuba")
     except ImportError as error:
         raise MitsubaExportError(
             "Mitsuba bindings are unavailable; run with `uv run --group mitsuba`"
