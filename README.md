@@ -61,17 +61,22 @@ The package currently exposes the Phase 0 core foundation:
 src/vbdmat/
   core/
     axes.py
+    errors.py
     geometry.py
     materials.py
     metadata.py
     optical_basis.py
     transforms.py
+    validation.py
+    volumes.py
 tests/
 ```
 
 The public core API includes `GridGeometry`, `OpticalBasis`, material palette
-types, `SchemaVersion`, `SchemaIdentity`, and `Provenance`. Volume containers
-and I/O remain intentionally unimplemented until their Phase 0 steps.
+types, schema and provenance metadata, `MaterialLabelVolume`,
+`MaterialMixtureVolume`, `OpticalPropertyVolume`, and structured volume
+validation errors. Persistence and renderer I/O remain intentionally
+unimplemented until their Phase 0 steps.
 
 ## Phase 0 design contracts
 
