@@ -33,6 +33,7 @@ _UNIT_TO_METRES = {"m": 1.0, "mm": 1.0e-3}
 #: Source units the mesh voxelizer accepts, exposed for config-time validation.
 SUPPORTED_MESH_UNITS: tuple[str, ...] = tuple(sorted(_UNIT_TO_METRES))
 _BARYCENTRIC_TOLERANCE = 1e-9
+_SURFACE_TOLERANCE_M = 1e-9
 # Distinct sub-voxel Y/Z offsets (fractions of a voxel). They must differ so that
 # cell centres with equal Y and Z do not stay on a 45-degree triangulation diagonal.
 _SAMPLE_JITTER_Y = 7.3e-5
@@ -252,9 +253,19 @@ def _classify(
     label = np.zeros((nz, ny, nx), dtype=np.uint16)
 
     for k in range(nz):
-        zc = oz + (k + 0.5) * sz + jitter_z
+        centre_z = oz + (k + 0.5) * sz
+        zc = centre_z + jitter_z
         for j in range(ny):
-            yc = oy + (j + 0.5) * sy + jitter_y
+            centre_y = oy + (j + 0.5) * sy
+            yc = centre_y + jitter_y
+            centres = np.column_stack(
+                (
+                    xc,
+                    np.full(nx, centre_y, dtype=np.float64),
+                    np.full(nx, centre_z, dtype=np.float64),
+                )
+            )
+            on_surface = _points_on_surface(centres, triangles_m)
             w1 = ((yc - y0) * (z2 - z0) - (y2 - y0) * (zc - z0)) / safe_denom
             w2 = ((y1 - y0) * (zc - z0) - (yc - y0) * (z1 - z0)) / safe_denom
             w0 = 1.0 - w1 - w2
@@ -265,16 +276,56 @@ def _classify(
                 & (w2 >= -_BARYCENTRIC_TOLERANCE)
             )
             if not np.any(inside):
+                if np.any(on_surface):
+                    label[k, j, on_surface] = material_id
                 continue
             x_int = w0 * x0 + w1 * x1 + w2 * x2
             xi = x_int[inside]
             si = sign[inside]
             ahead = xi[None, :] > xc[:, None]
             winding = (ahead * si[None, :]).sum(axis=1)
-            occupied = np.abs(winding) >= 0.5
+            occupied = (np.abs(winding) >= 0.5) | on_surface
             if np.any(occupied):
                 label[k, j, occupied] = material_id
     return label
+
+
+def _points_on_surface(
+    points: npt.NDArray[np.float64], triangles: npt.NDArray[np.float64]
+) -> npt.NDArray[np.bool_]:
+    """Return points lying on any triangle under ADR-006's closed-solid rule."""
+    result = np.zeros(points.shape[0], dtype=np.bool_)
+    for triangle in triangles:
+        origin = triangle[0]
+        edge_u = triangle[1] - origin
+        edge_v = triangle[2] - origin
+        normal = np.cross(edge_u, edge_v)
+        normal_length = float(np.linalg.norm(normal))
+        relative = points - origin
+        plane_distance = np.abs(relative @ normal) / normal_length
+        candidates = plane_distance <= _SURFACE_TOLERANCE_M
+        if not np.any(candidates):
+            continue
+
+        dot_uu = float(edge_u @ edge_u)
+        dot_uv = float(edge_u @ edge_v)
+        dot_vv = float(edge_v @ edge_v)
+        denominator = dot_uu * dot_vv - dot_uv * dot_uv
+        candidate_relative = relative[candidates]
+        dot_pu = candidate_relative @ edge_u
+        dot_pv = candidate_relative @ edge_v
+        bary_u = (dot_vv * dot_pu - dot_uv * dot_pv) / denominator
+        bary_v = (dot_uu * dot_pv - dot_uv * dot_pu) / denominator
+        on_triangle = (
+            (bary_u >= -_BARYCENTRIC_TOLERANCE)
+            & (bary_v >= -_BARYCENTRIC_TOLERANCE)
+            & (bary_u + bary_v <= 1.0 + _BARYCENTRIC_TOLERANCE)
+        )
+        candidate_indices = np.flatnonzero(candidates)
+        result[candidate_indices[on_triangle]] = True
+        if np.all(result):
+            break
+    return result
 
 
 def _domain(

@@ -107,6 +107,15 @@ def test_translated_cube_preserves_count() -> None:
     assert result.diagnostics.occupied_cells == 27
 
 
+def test_cell_centres_on_mesh_boundary_use_closed_solid_convention() -> None:
+    result = _voxelize_cube((0.5, 0.5, 0.5), (2.5, 2.5, 2.5))
+    label = np.asarray(result.volume.material_id)
+
+    assert result.diagnostics.occupied_cells == 27
+    assert np.all(label[1:4, 1:4, 1:4] == 1)
+    assert int(label.sum()) == 27
+
+
 def test_non_cubic_box_occupancy() -> None:
     result = _voxelize_cube((0, 0, 0), (5, 3, 2))
     assert result.diagnostics.occupied_cells == 5 * 3 * 2
