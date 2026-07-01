@@ -14,6 +14,9 @@ dependencies = [
     "zarr>=3.0",
 ]
 
+[project.scripts]
+vbdmat = "vbdmat.cli.main:main"
+
 [dependency-groups]
 dev = [
     "mypy>=1.15",
