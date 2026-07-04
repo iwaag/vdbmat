@@ -1,6 +1,7 @@
 # ADR-006: Phase 1 Inputs and Voxelization
 
-- **Status:** Accepted
+- **Status:** Accepted; mesh-input sections superseded by ADR-009 (the core accepts
+  only the `vbdmat.voxels` manifest; mesh voxelization is a future external tool)
 - **Date:** 2026-07-01
 - **Decision owners:** VBDMAT maintainers
 - **Phase:** 1, Step 1
