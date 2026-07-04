@@ -10,11 +10,11 @@ from typing import TypeAlias, cast
 
 import numpy as np
 
-from vbdmat.core.axes import IndexZYX, PointXYZ
-from vbdmat.core.geometry import GridGeometry
-from vbdmat.core.metadata import Provenance, SchemaIdentity
-from vbdmat.core.transforms import apply_rigid_transform
-from vbdmat.core.volumes import OpticalPropertyVolume
+from vdbmat.core.axes import IndexZYX, PointXYZ
+from vdbmat.core.geometry import GridGeometry
+from vdbmat.core.metadata import Provenance, SchemaIdentity
+from vdbmat.core.transforms import apply_rigid_transform
+from vdbmat.core.volumes import OpticalPropertyVolume
 
 
 class BoundaryAxis(StrEnum):

@@ -1,4 +1,4 @@
-"""Strict reader for the ``vbdmat.voxels`` direct material-voxel interchange.
+"""Strict reader for the ``vdbmat.voxels`` direct material-voxel interchange.
 
 Implements ADR-006: a UTF-8 JSON manifest plus one ``uint16[z, y, x]`` NumPy
 payload is adapted into a canonical :class:`MaterialLabelVolume`. The reader never
@@ -18,7 +18,7 @@ from typing import Any, cast
 
 import numpy as np
 
-from vbdmat.core import (
+from vdbmat.core import (
     GridGeometry,
     MaterialDefinition,
     MaterialLabelVolume,
@@ -27,11 +27,11 @@ from vbdmat.core import (
     Provenance,
     SchemaVersion,
 )
-from vbdmat.core.transforms import Matrix4
+from vdbmat.core.transforms import Matrix4
 
 from .errors import VoxelManifestError
 
-FORMAT_NAME = "vbdmat.voxels"
+FORMAT_NAME = "vdbmat.voxels"
 SUPPORTED_MAJOR = 1
 ASSET_TYPE = "material-label"
 
@@ -91,7 +91,7 @@ def inspect_material_label_manifest(path: str | Path) -> ManifestInspection:
 
 
 def read_material_label_manifest(path: str | Path) -> MaterialLabelVolume:
-    """Read and validate a ``vbdmat.voxels`` manifest into a canonical volume."""
+    """Read and validate a ``vdbmat.voxels`` manifest into a canonical volume."""
     manifest, manifest_path = _load_manifest(path)
     version = _parse_version(manifest)
     shape = _shape_zyx(manifest)
@@ -142,7 +142,7 @@ def write_material_label_manifest(
     *,
     identity: str | None = None,
 ) -> Path:
-    """Write a canonical volume as a ``vbdmat.voxels`` manifest plus payload.
+    """Write a canonical volume as a ``vdbmat.voxels`` manifest plus payload.
 
     This is the shared emitter for external input generators (ADR-009 D2): the
     payload is written as ``<name>.material_id.npy`` and the manifest as

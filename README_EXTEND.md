@@ -1,8 +1,8 @@
 # README_EXTEND.md — For External Voxel-Generator Tool Developers
 
-Audience: developers writing tools that *produce* vbdmat's input data (material-labeled
+Audience: developers writing tools that *produce* vdbmat's input data (material-labeled
 voxel grids) — e.g. STL-to-voxel converters, 2D image-stack importers, generative
-formation models. You do not need to read the vbdmat core codebase.
+formation models. You do not need to read the vdbmat core codebase.
 **The contract you must honor is the file format, not the generation algorithm.**
 
 ## 1. What you must ultimately emit
@@ -12,7 +12,7 @@ A pair of files:
 1. `<name>.voxels.json` — metadata (the subject of this document)
 2. `<name>.material_id.npy` — the material-ID voxel grid itself (`uint16`, axis order `z,y,x`)
 
-The vbdmat core only reads these two files. Whether your source is an STL mesh, a CT
+The vdbmat core only reads these two files. Whether your source is an STL mesh, a CT
 scan image stack, or a procedural formation model, it is accepted as input as long as
 you can reduce it to this shape.
 
@@ -20,7 +20,7 @@ you can reduce it to this shape.
 
 | Field | Value | Notes |
 | --- | --- | --- |
-| `format` | `"vbdmat.voxels"` | fixed literal |
+| `format` | `"vdbmat.voxels"` | fixed literal |
 | `format_version` | `"1.0.0"` | major version must be `1` |
 | `asset_type` | `"material-label"` | fixed literal |
 | `payload.path` | relative path to the `.npy` (POSIX, no `..`) | must resolve inside the manifest's own directory |
@@ -42,21 +42,21 @@ Unknown keys anywhere in the document are rejected (strict schema).
 - `role` accepts exactly two values: `"background"` or `"material"` — nothing else.
 - `material_id` must be an integer in `[0, 65535]`, unique within the palette.
 - **`name` is free text at this layer, but if it doesn't match a name known to
-  vbdmat's optical mapping table, that material's optical coefficients (absorption,
+  vdbmat's optical mapping table, that material's optical coefficients (absorption,
   scattering, refractive index) cannot be resolved.**
   The built-in table currently supports exactly these names
   (`phase0-provisional-materials-v1`):
   `air`, `transparent-resin`, `white-resin`, `black-opaque-resin`,
   and the diagnostic markers `axis-x-diagnostic` / `axis-y-diagnostic` /
   `axis-z-diagnostic`. If you need a material outside this list, coordinate with the
-  vbdmat side first — today there is only one built-in table, and external
+  vdbmat side first — today there is only one built-in table, and external
   substitution is not yet supported (planned under roadmap `Phase 1-side1`).
 
 ## 4. Minimal example
 
 ```json
 {
-  "format": "vbdmat.voxels",
+  "format": "vdbmat.voxels",
   "format_version": "1.0.0",
   "asset_type": "material-label",
   "payload": {
@@ -92,12 +92,12 @@ sits alongside it in the same directory).
 ## 5. Self-validation
 
 ```bash
-uv run vbdmat import-voxels path/to/your.voxels.json
+uv run vdbmat import-voxels path/to/your.voxels.json
 ```
 
 If this succeeds without error, your tool's output satisfies the contract. To run it
 through the full pipeline, write a run config (`{"input": {"kind": "direct-voxel",
-"path": "your.voxels.json"}, ...}`) and run `uv run vbdmat run <config>.json`.
+"path": "your.voxels.json"}, ...}`) and run `uv run vdbmat run <config>.json`.
 
 ## 6. Common pitfalls
 
@@ -115,14 +115,14 @@ through the full pipeline, write a run config (`{"input": {"kind": "direct-voxel
 Phase 1-side1 has landed: this contract is now the **sole** core input interface.
 STL mesh voxelization was removed from the core (`input.kind: "mesh"` no longer
 exists), and the optical coefficient mapping is pluggable — supply a
-`vbdmat.optical-mapping` JSON document via the run config's `mapping.path` +
+`vdbmat.optical-mapping` JSON document via the run config's `mapping.path` +
 `mapping.digest` or the CLI's `convert --mapping-file` (see
 `docs/schemas/optical-mapping-v1.md`; get the digest with
-`vbdmat mapping-digest FILE`).
+`vdbmat mapping-digest FILE`).
 
 Two conveniences for generator authors:
 
-- `vbdmat.io.write_material_label_manifest(directory, name, volume)` emits a
+- `vdbmat.io.write_material_label_manifest(directory, name, volume)` emits a
   conforming manifest + payload from a canonical volume, so you don't hand-roll
   the JSON.
 - `tools/image_stack_generator/generate.py` is a complete reference generator
@@ -135,6 +135,6 @@ Two conveniences for generator authors:
 - `docs/adr/0006-phase1-inputs-and-voxelization.md` — the formal ADR for the manifest
 - `docs/material-identity-contract.md` — material naming rules and the two identity layers
 - `docs/schemas/optical-mapping-v1.md` — the external optical-mapping document format
-- `src/vbdmat/io/voxel_manifest.py` — validation implementation (source of truth for behavior)
-- `src/vbdmat/core/materials.py` — `MaterialRole`/`MaterialPalette` definitions
-- `src/vbdmat/optics/config.py` — built-in material names and their optical coefficients
+- `src/vdbmat/io/voxel_manifest.py` — validation implementation (source of truth for behavior)
+- `src/vdbmat/core/materials.py` — `MaterialRole`/`MaterialPalette` definitions
+- `src/vdbmat/optics/config.py` — built-in material names and their optical coefficients

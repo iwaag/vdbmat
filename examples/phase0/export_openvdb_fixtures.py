@@ -4,9 +4,9 @@ import argparse
 import json
 from pathlib import Path
 
-from vbdmat.exporters.openvdb import OpenVDBExportConfig, export_openvdb
-from vbdmat.fixtures import all_synthetic_fixtures
-from vbdmat.optics import map_material_volume_to_optical, phase0_provisional_mapping
+from vdbmat.exporters.openvdb import OpenVDBExportConfig, export_openvdb
+from vdbmat.fixtures import all_synthetic_fixtures
+from vdbmat.optics import map_material_volume_to_optical, phase0_provisional_mapping
 
 
 def main() -> None:

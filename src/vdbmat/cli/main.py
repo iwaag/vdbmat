@@ -1,4 +1,4 @@
-"""Installed ``vbdmat`` console entry point for the Phase 1 research MVP.
+"""Installed ``vdbmat`` console entry point for the Phase 1 research MVP.
 
 This module owns argument parsing, presentation, and exit-code mapping only. Scientific
 work is delegated to the package APIs fixed in Steps 2--6.
@@ -18,13 +18,13 @@ from typing import Any, NoReturn, cast
 
 import numpy as np
 
-from vbdmat.core import (
+from vdbmat.core import (
     MaterialLabelVolume,
     MaterialMixtureVolume,
     OpticalPropertyVolume,
     VolumeValidationError,
 )
-from vbdmat.exporters import (
+from vdbmat.exporters import (
     ExportInputError,
     ExportOutcome,
     MitsubaDependencyError,
@@ -33,19 +33,19 @@ from vbdmat.exporters import (
     OpenVDBExportError,
     export_restored_optical,
 )
-from vbdmat.io import (
+from vdbmat.io import (
     VolumeIOError,
     VoxelManifestError,
     read_material_label_manifest,
     read_volume,
     write_volume,
 )
-from vbdmat.optics import (
+from vdbmat.optics import (
     OpticalMappingError,
     load_optical_mapping,
     map_material_volume_to_optical,
 )
-from vbdmat.pipeline import (
+from vdbmat.pipeline import (
     DEFAULT_MAPPING_NAME,
     InputKind,
     PipelineConfig,
@@ -72,7 +72,7 @@ class _Parser(argparse.ArgumentParser):
 
 def _parser() -> argparse.ArgumentParser:
     parser = _Parser(
-        prog="vbdmat",
+        prog="vdbmat",
         description="Renderer-independent voxel material preprocessing.",
         epilog=_PROVISIONAL,
     )
@@ -81,7 +81,7 @@ def _parser() -> argparse.ArgumentParser:
     command_parsers: list[argparse.ArgumentParser] = []
 
     import_parser = commands.add_parser(
-        "import-voxels", help="import a vbdmat.voxels manifest to material Zarr"
+        "import-voxels", help="import a vdbmat.voxels manifest to material Zarr"
     )
     command_parsers.append(import_parser)
     _paths(import_parser, "MANIFEST")
@@ -101,13 +101,13 @@ def _parser() -> argparse.ArgumentParser:
         "--mapping-file",
         type=Path,
         default=None,
-        help="external vbdmat.optical-mapping JSON document (ADR-009)",
+        help="external vdbmat.optical-mapping JSON document (ADR-009)",
     )
     _writer_flags(convert_parser)
 
     digest_parser = commands.add_parser(
         "mapping-digest",
-        help="report the canonical digest of a vbdmat.optical-mapping document",
+        help="report the canonical digest of a vdbmat.optical-mapping document",
     )
     command_parsers.append(digest_parser)
     digest_parser.add_argument("mapping_file", type=Path, metavar="MAPPING")
@@ -171,7 +171,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         debug = (
             bool(getattr(arguments, "debug", False))
             or "--debug" in raw_arguments
-            or os.environ.get("VBDMAT_DEBUG") == "1"
+            or os.environ.get("VDBMAT_DEBUG") == "1"
         )
         if debug:
             raise
@@ -188,17 +188,17 @@ def main(argv: Sequence[str] | None = None) -> int:
                     }
                 )
             )
-        sys.stderr.write(f"vbdmat: {error.message}\n")
+        sys.stderr.write(f"vdbmat: {error.message}\n")
         return int(error.code)
     except Exception as error:
         debug = (
             bool(getattr(arguments, "debug", False))
             or "--debug" in raw_arguments
-            or os.environ.get("VBDMAT_DEBUG") == "1"
+            or os.environ.get("VDBMAT_DEBUG") == "1"
         )
         if debug:
             raise
-        sys.stderr.write(f"vbdmat: internal error: {error}\n")
+        sys.stderr.write(f"vdbmat: internal error: {error}\n")
         return int(ExitCode.INTERNAL)
 
 

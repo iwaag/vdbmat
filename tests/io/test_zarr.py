@@ -9,26 +9,26 @@ import numpy as np
 import pytest
 import zarr
 
-from vbdmat.core import GridGeometry
-from vbdmat.core.volumes import (
+from vdbmat.core import GridGeometry
+from vdbmat.core.volumes import (
     MaterialLabelVolume,
     MaterialMixtureVolume,
     OpticalPropertyVolume,
     VolumeAssetType,
 )
-from vbdmat.fixtures import (
+from vdbmat.fixtures import (
     all_synthetic_fixtures,
     transparent_opaque_interface,
     two_material_mixture_ramp,
 )
-from vbdmat.io import (
+from vdbmat.io import (
     VolumeIOError,
     inspect_volume,
     read_optical_region,
     read_volume,
     write_volume,
 )
-from vbdmat.optics import (
+from vdbmat.optics import (
     map_material_volume_to_optical,
     phase0_provisional_mapping,
 )
@@ -85,7 +85,7 @@ def test_inspection_reports_fields_chunks_units_and_schema(tmp_path: Path) -> No
     write_volume(path, _optical())
     result = inspect_volume(path)
     assert result.asset_type is VolumeAssetType.OPTICAL_PROPERTY
-    assert result.schema_name == "vbdmat.volume"
+    assert result.schema_name == "vdbmat.volume"
     assert result.schema_version == "1.0.0"
     assert [item.name for item in result.arrays] == ["sigma_a", "sigma_s", "g", "ior"]
     assert result.arrays[0].dimensions == ("z", "y", "x", "basis")
@@ -170,9 +170,9 @@ def test_partial_read_rejects_material_asset(tmp_path: Path) -> None:
 
 def _mutate_manifest(path: Path, mutation: Any) -> None:
     root = zarr.open_group(path, mode="r+")
-    manifest = dict(root.attrs["vbdmat"])
+    manifest = dict(root.attrs["vdbmat"])
     mutation(manifest)
-    root.attrs["vbdmat"] = manifest
+    root.attrs["vdbmat"] = manifest
 
 
 def test_missing_array_is_rejected(tmp_path: Path) -> None:
@@ -226,8 +226,8 @@ def test_missing_required_manifest_attribute_is_rejected(tmp_path: Path) -> None
     path = tmp_path / "asset.zarr"
     write_volume(path, _optical())
     root = zarr.open_group(path, mode="r+")
-    del root.attrs["vbdmat"]
-    with pytest.raises(VolumeIOError, match="vbdmat: must be an object"):
+    del root.attrs["vdbmat"]
+    with pytest.raises(VolumeIOError, match="vdbmat: must be an object"):
         read_volume(path)
 
 

@@ -15,13 +15,13 @@ import hashlib
 import json
 from pathlib import Path
 
-from vbdmat.fixtures import (
+from vdbmat.fixtures import (
     COUPON_PAYLOAD_NAME,
     window_coupon_manifest,
     window_coupon_payload_bytes,
     write_phase1_fixtures,
 )
-from vbdmat.optics import phase0_provisional_mapping, write_optical_mapping
+from vdbmat.optics import phase0_provisional_mapping, write_optical_mapping
 
 INPUTS = Path(__file__).parent / "inputs"
 INVALID = INPUTS / "invalid"

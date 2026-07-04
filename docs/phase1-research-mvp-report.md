@@ -22,7 +22,7 @@ print predictor. Optical coefficients are provisional and uncalibrated.
 
 ### Direct material voxels
 
-`vbdmat.voxels/1.x` consists of one UTF-8 JSON manifest and one NumPy `.npy` payload.
+`vdbmat.voxels/1.x` consists of one UTF-8 JSON manifest and one NumPy `.npy` payload.
 The payload is exact `uint16[z,y,x]`; the manifest explicitly declares shape, metre or
 millimetre voxel size, rigid placement, ordered palette including background ID 0,
 source identity, relative payload path, and SHA-256. The reader disables pickle and
@@ -75,7 +75,7 @@ load direct voxels / voxelize mesh
   -> summarize -> optional export from restored optical.zarr
 ```
 
-`vbdmat.pipeline-config/1.0.0` identifies the input kind and path, explicit mesh
+`vdbmat.pipeline-config/1.0.0` identifies the input kind and path, explicit mesh
 settings when applicable, optical mapping name and digest, validation/export stages,
 output path, overwrite policy, and execution seed. Its canonical JSON SHA-256 is the
 configuration digest. The deterministic run ID combines that digest with the source
@@ -93,9 +93,9 @@ run/
   exports/{mitsuba,openvdb}/       # only when requested
 ```
 
-`run.json` is `vbdmat.run/1.0.0`. It records stage status, versions, chained
+`run.json` is `vdbmat.run/1.0.0`. It records stage status, versions, chained
 provenance, relative artifact paths, schemas, sizes, and SHA-256 values. The Zarr
-assets remain `vbdmat.volume/1.0.0`; the run manifest links rather than reinterprets
+assets remain `vdbmat.volume/1.0.0`; the run manifest links rather than reinterprets
 them. A sibling temporary directory is completely written and validated before atomic
 publication. Resume is not supported; overwrite must be explicit and preserves the
 previous valid bundle until its replacement validates.
@@ -114,7 +114,7 @@ previous valid bundle until its replacement validates.
 
 All writing commands refuse an existing output unless `--overwrite` is supplied.
 `--json` emits one machine-readable document on stdout; diagnostics remain on stderr.
-Expected errors have no traceback unless `--debug` or `VBDMAT_DEBUG=1` is used.
+Expected errors have no traceback unless `--debug` or `VDBMAT_DEBUG=1` is used.
 
 | Exit | Meaning |
 | ---: | --- |
@@ -154,7 +154,7 @@ The final clean-installed reproduction produced these results:
 ```text
 uv lock --check                              pass
 ruff format check / lint                     pass
-mypy --strict src/vbdmat                     pass (44 source files)
+mypy --strict src/vdbmat                     pass (44 source files)
 default tests                                374 passed, 2 native-only skipped
 locked Mitsuba tests                         10 passed
 pinned OpenVDB/Blender integration tests     2 passed
@@ -281,7 +281,7 @@ All Phase 1 exit criteria have passing evidence or an accepted design decision.
    loss behavior; and a mixture ramp for conservation. Each fixture needs analytic
    totals, symmetry/asymmetry expectations, and chunk-boundary variants.
 
-Phase 2 should preserve `vbdmat.volume/1.0.0`, ADR-001 geometry, ADR-004 persistence,
+Phase 2 should preserve `vdbmat.volume/1.0.0`, ADR-001 geometry, ADR-004 persistence,
 and ADR-007 provenance/publication. A new process configuration and intermediate
 diagnostic schema are expected; a canonical schema revision is not justified by the
 current evidence.

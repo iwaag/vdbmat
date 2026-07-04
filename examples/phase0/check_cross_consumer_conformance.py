@@ -8,7 +8,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from vbdmat.conformance import (
+from vdbmat.conformance import (
     EXPECTED_ADAPTER_DIFFERENCES,
     ConformanceCheck,
     ConformanceLayer,
@@ -17,10 +17,10 @@ from vbdmat.conformance import (
     check_fixture_conformance,
     image_sanity_check,
 )
-from vbdmat.core.volumes import OpticalPropertyVolume
-from vbdmat.fixtures import all_synthetic_fixtures
-from vbdmat.io import read_volume, write_volume
-from vbdmat.optics import map_material_volume_to_optical, phase0_provisional_mapping
+from vdbmat.core.volumes import OpticalPropertyVolume
+from vdbmat.fixtures import all_synthetic_fixtures
+from vdbmat.io import read_volume, write_volume
+from vdbmat.optics import map_material_volume_to_optical, phase0_provisional_mapping
 
 
 def _render_records(path: Path) -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
@@ -93,7 +93,7 @@ def main() -> None:
 
     mapping = phase0_provisional_mapping()
     results: list[FixtureConformance] = []
-    with tempfile.TemporaryDirectory(prefix="vbdmat-conformance-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="vdbmat-conformance-") as temporary:
         root = Path(temporary)
         for fixture in all_synthetic_fixtures():
             name = fixture.manifest.name

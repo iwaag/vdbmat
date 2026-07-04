@@ -1,4 +1,4 @@
-"""Tests for the ``vbdmat.voxels`` direct material-voxel reader (ADR-006, Step 2)."""
+"""Tests for the ``vdbmat.voxels`` direct material-voxel reader (ADR-006, Step 2)."""
 
 from __future__ import annotations
 
@@ -11,8 +11,8 @@ from typing import Any
 import numpy as np
 import pytest
 
-from vbdmat.core import MaterialRole
-from vbdmat.io import (
+from vdbmat.core import MaterialRole
+from vdbmat.io import (
     VoxelManifestError,
     inspect_material_label_manifest,
     read_material_label_manifest,
@@ -37,7 +37,7 @@ def _payload_bytes(array: np.ndarray[Any, np.dtype[np.uint16]]) -> bytes:
 
 def _base_manifest(sha: str) -> dict[str, Any]:
     return {
-        "format": "vbdmat.voxels",
+        "format": "vdbmat.voxels",
         "format_version": "1.0.0",
         "asset_type": "material-label",
         "payload": {
@@ -61,7 +61,7 @@ def _base_manifest(sha: str) -> dict[str, Any]:
             {"material_id": 3, "name": "black", "role": "material"},
         ],
         "source": {
-            "generator": "vbdmat.voxels",
+            "generator": "vdbmat.voxels",
             "generator_version": "1.0.0",
             "identity": "window-coupon",
         },
@@ -98,7 +98,7 @@ def test_provenance_records_format_and_checksum(coupon: Path) -> None:
     payload = _payload_bytes(_coupon_label())
     sha = hashlib.sha256(payload).hexdigest()
     volume = read_material_label_manifest(coupon)
-    assert "vbdmat.voxels/1.0.0" in volume.provenance.sources
+    assert "vdbmat.voxels/1.0.0" in volume.provenance.sources
     assert f"sha256:{sha}" in volume.provenance.sources
     assert "identity:window-coupon" in volume.provenance.sources
 
@@ -276,7 +276,7 @@ def test_writer_rejects_invalid_name(tmp_path: Path) -> None:
 
 
 def test_import_does_not_require_zarr_or_renderers() -> None:
-    import vbdmat.io.voxel_manifest as module
+    import vdbmat.io.voxel_manifest as module
 
     source = Path(module.__file__).read_text(encoding="utf-8")
     assert "zarr" not in source

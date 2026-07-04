@@ -5,8 +5,8 @@ from dataclasses import FrozenInstanceError, replace
 
 import pytest
 
-from vbdmat.core import OpticalBasis, SchemaVersion
-from vbdmat.optics import (
+from vdbmat.core import OpticalBasis, SchemaVersion
+from vdbmat.optics import (
     CalibrationStatus,
     MaterialOpticalProperties,
     MixingRule,

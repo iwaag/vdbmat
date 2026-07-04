@@ -4,9 +4,9 @@ from types import SimpleNamespace
 
 import numpy as np
 
-from vbdmat.exporters.openvdb import export_openvdb
-from vbdmat.fixtures import anisotropic_axis_marker
-from vbdmat.optics import map_material_volume_to_optical, phase0_provisional_mapping
+from vdbmat.exporters.openvdb import export_openvdb
+from vdbmat.fixtures import anisotropic_axis_marker
+from vdbmat.optics import map_material_volume_to_optical, phase0_provisional_mapping
 
 
 class _Transform:
@@ -54,7 +54,7 @@ def test_export_uses_named_float_grids_common_transform_and_metadata(
     grids = written["grids"]
     assert [grid.name for grid in grids] == list(result.grid_names)  # type: ignore[attr-defined]
     assert all(grid.array.shape == (4, 3, 2) for grid in grids)  # type: ignore[attr-defined]
-    assert all(grid.metadata["vbdmat:dimensions"] == "x,y,z" for grid in grids)  # type: ignore[attr-defined]
+    assert all(grid.metadata["vdbmat:dimensions"] == "x,y,z" for grid in grids)  # type: ignore[attr-defined]
     transform = grids[0].transform  # type: ignore[index,union-attr]
     assert all(grid.transform.matrix == transform.matrix for grid in grids)  # type: ignore[attr-defined]
     # OpenVDB right-multiplies row vectors, hence the serialized matrix transpose.

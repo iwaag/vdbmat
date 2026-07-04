@@ -7,7 +7,7 @@ from typing import TypeAlias, cast
 import numpy as np
 import numpy.typing as npt
 
-from vbdmat.core import (
+from vdbmat.core import (
     MaterialLabelVolume,
     MaterialMixtureVolume,
     OpticalPropertyVolume,
@@ -19,7 +19,7 @@ from .errors import OpticalMappingError
 
 MaterialVolume: TypeAlias = MaterialLabelVolume | MaterialMixtureVolume
 
-MAPPING_GENERATOR = "vbdmat.optics.reference-mapping"
+MAPPING_GENERATOR = "vdbmat.optics.reference-mapping"
 MAPPING_GENERATOR_VERSION = "1.0.0"
 
 

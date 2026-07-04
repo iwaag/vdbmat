@@ -79,20 +79,20 @@ def main() -> None:
     scene.render.image_settings.file_format = "PNG"
     scene.render.filepath = str(output_path)
     scene.render.film_transparent = False
-    scene.world = bpy.data.worlds.new("vbdmat-world")
+    scene.world = bpy.data.worlds.new("vdbmat-world")
     scene.world.color = (0.02, 0.02, 0.02)
     scene.unit_settings.system = "METRIC"
     scene.unit_settings.scale_length = 1.0
 
-    volume = bpy.data.volumes.new("vbdmat-volume")
+    volume = bpy.data.volumes.new("vdbmat-volume")
     volume.filepath = str(vdb_path)
     volume.is_sequence = False
     if not volume.grids.load():
         raise RuntimeError(f"failed to load VDB grids: {volume.grids.error_message}")
-    volume_obj = bpy.data.objects.new("vbdmat-volume", volume)
+    volume_obj = bpy.data.objects.new("vdbmat-volume", volume)
     scene.collection.objects.link(volume_obj)
 
-    material = bpy.data.materials.new("vbdmat-cycles-volume")
+    material = bpy.data.materials.new("vdbmat-cycles-volume")
     material.use_nodes = True
     nodes = material.node_tree.nodes
     links = material.node_tree.links

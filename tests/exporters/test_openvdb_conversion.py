@@ -3,14 +3,14 @@ from dataclasses import replace
 import numpy as np
 import pytest
 
-from vbdmat.boundaries import CapabilityStatus
-from vbdmat.exporters.openvdb import (
+from vdbmat.boundaries import CapabilityStatus
+from vdbmat.exporters.openvdb import (
     OpenVDBExportConfig,
     convert_openvdb_fields,
     openvdb_capability_report,
 )
-from vbdmat.fixtures import anisotropic_axis_marker, layered_material_slab
-from vbdmat.optics import map_material_volume_to_optical, phase0_provisional_mapping
+from vdbmat.fixtures import anisotropic_axis_marker, layered_material_slab
+from vdbmat.optics import map_material_volume_to_optical, phase0_provisional_mapping
 
 
 def _mapped(fixture):  # type: ignore[no-untyped-def]

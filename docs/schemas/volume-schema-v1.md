@@ -1,4 +1,4 @@
-# VBDMAT Logical Volume Schema 1.0
+# VDBMAT Logical Volume Schema 1.0
 
 This document is the implementation-oriented summary of ADR-001 and ADR-002. It defines logical assets, not their Zarr paths or compression. ADR-004 will define persistence layout.
 
@@ -6,7 +6,7 @@ This document is the implementation-oriented summary of ADR-001 and ADR-002. It 
 
 ```text
 schema:
-  name: "vbdmat.volume"
+  name: "vdbmat.volume"
   version: "1.0.0"
 asset_type: "material-label" | "material-mixture" | "optical-property"
 geometry:

@@ -4,7 +4,7 @@ from datetime import UTC, datetime, timedelta, timezone
 
 import pytest
 
-from vbdmat.core import (
+from vdbmat.core import (
     VOLUME_SCHEMA,
     OpticalBasis,
     OpticalBasisKind,
@@ -69,7 +69,7 @@ def test_schema_version_is_strict_and_major_compatible() -> None:
     assert str(version) == "1.2.3"
     assert version.has_compatible_major(SchemaVersion(1, 9, 0))
     assert not version.has_compatible_major(SchemaVersion(2, 0, 0))
-    assert SchemaIdentity("vbdmat.volume", SchemaVersion(1, 0, 0)) == VOLUME_SCHEMA
+    assert SchemaIdentity("vdbmat.volume", SchemaVersion(1, 0, 0)) == VOLUME_SCHEMA
 
 
 @pytest.mark.parametrize("value", ["1", "1.2", "01.2.3", "1.2.3-dev", "a.b.c"])
@@ -81,7 +81,7 @@ def test_invalid_schema_versions_are_rejected(value: str) -> None:
 def test_provenance_normalizes_sources_and_accepts_utc() -> None:
     created = datetime(2026, 6, 28, 12, 0, tzinfo=UTC)
     provenance = Provenance(
-        generator="vbdmat",
+        generator="vdbmat",
         generator_version="0.1.0",
         created_utc=created,
         configuration_digest="sha256:" + "a" * 64,
@@ -101,14 +101,14 @@ def test_provenance_normalizes_sources_and_accepts_utc() -> None:
 )
 def test_provenance_requires_utc(created: datetime) -> None:
     with pytest.raises(ValueError, match=r"UTC|timezone-aware"):
-        Provenance("vbdmat", "0.1.0", created_utc=created)
+        Provenance("vdbmat", "0.1.0", created_utc=created)
 
 
 def test_invalid_configuration_digest_is_rejected() -> None:
     with pytest.raises(ValueError, match="sha256"):
-        Provenance("vbdmat", "0.1.0", configuration_digest="ABC")
+        Provenance("vdbmat", "0.1.0", configuration_digest="ABC")
 
 
 def test_provenance_rejects_one_string_as_sources_sequence() -> None:
     with pytest.raises(TypeError, match="sequence of strings"):
-        Provenance("vbdmat", "0.1.0", sources="fixture")  # type: ignore[arg-type]
+        Provenance("vdbmat", "0.1.0", sources="fixture")  # type: ignore[arg-type]

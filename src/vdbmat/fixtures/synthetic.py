@@ -8,7 +8,7 @@ from typing import TypeAlias, cast
 import numpy as np
 import numpy.typing as npt
 
-from vbdmat.core import (
+from vdbmat.core import (
     GridGeometry,
     MaterialDefinition,
     MaterialLabelVolume,
@@ -17,12 +17,12 @@ from vbdmat.core import (
     MaterialRole,
     Provenance,
 )
-from vbdmat.core.axes import IndexZYX, PointXYZ, ShapeZYX, VoxelSizeXYZ
+from vdbmat.core.axes import IndexZYX, PointXYZ, ShapeZYX, VoxelSizeXYZ
 
 CanonicalMaterialVolume: TypeAlias = MaterialLabelVolume | MaterialMixtureVolume
 BoundsXYZ: TypeAlias = tuple[PointXYZ, PointXYZ]
 
-FIXTURE_GENERATOR = "vbdmat.synthetic-fixtures"
+FIXTURE_GENERATOR = "vdbmat.synthetic-fixtures"
 FIXTURE_GENERATOR_VERSION = "1.0.0"
 
 _TRANSLATED_LOCAL_TO_WORLD = (

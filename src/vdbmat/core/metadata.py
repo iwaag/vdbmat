@@ -99,7 +99,7 @@ class Provenance:
 
 
 VOLUME_SCHEMA = SchemaIdentity(
-    name="vbdmat.volume", version=SchemaVersion(major=1, minor=0, patch=0)
+    name="vdbmat.volume", version=SchemaVersion(major=1, minor=0, patch=0)
 )
 
 

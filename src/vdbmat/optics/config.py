@@ -10,7 +10,7 @@ from numbers import Integral, Real
 from types import MappingProxyType
 from typing import TypeAlias, cast
 
-from vbdmat.core import OpticalBasis, SchemaVersion
+from vdbmat.core import OpticalBasis, SchemaVersion
 
 RGBTriple: TypeAlias = tuple[float, float, float]
 

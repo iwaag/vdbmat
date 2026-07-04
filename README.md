@@ -1,6 +1,6 @@
-# VBDMAT
+# VDBMAT
 
-VBDMAT is a renderer-independent preprocessing backend for voxel-based
+VDBMAT is a renderer-independent preprocessing backend for voxel-based
 material-jetting appearance research. The project will convert material voxel
 data into explicit optical-property volumes for downstream renderers.
 
@@ -87,11 +87,11 @@ complete canonical pipelines:
 uv sync --locked
 rm -rf .local/phase1/quickstart
 
-uv run vbdmat run examples/phase1/configs/window_coupon.run.json
-uv run vbdmat validate .local/phase1/quickstart/window_coupon --json
+uv run vdbmat run examples/phase1/configs/window_coupon.run.json
+uv run vdbmat validate .local/phase1/quickstart/window_coupon --json
 
-uv run vbdmat run examples/phase1/configs/stepped_wedge.run.json
-uv run vbdmat validate .local/phase1/quickstart/stepped_wedge --json
+uv run vdbmat run examples/phase1/configs/stepped_wedge.run.json
+uv run vdbmat validate .local/phase1/quickstart/stepped_wedge --json
 ```
 
 The first config imports the versioned JSON + NumPy multi-material coupon. The second
@@ -101,8 +101,8 @@ reads a watertight single-solid STL and explicitly declares millimetre source un
 provenance, and checksums. Inspect either bundle with:
 
 ```bash
-uv run vbdmat inspect .local/phase1/quickstart/window_coupon --json
-uv run vbdmat inspect .local/phase1/quickstart/stepped_wedge --json
+uv run vdbmat inspect .local/phase1/quickstart/window_coupon --json
+uv run vdbmat inspect .local/phase1/quickstart/stepped_wedge --json
 ```
 
 Optional Mitsuba and OpenVDB/Cycles export commands are documented in the
@@ -130,7 +130,7 @@ materials, a mixture ramp, and anisotropic XYZ axis markers.
 The package exposes the Phase 0 core foundation and the Phase 1 workflow:
 
 ```text
-src/vbdmat/
+src/vdbmat/
   core/
     axes.py
     errors.py
@@ -230,11 +230,11 @@ summary, and a machine-readable capability report.
 Build and verify the isolated OpenVDB/Blender Cycles proof:
 
 ```bash
-docker build -t vbdmat-phase0-step10:blender4.5.11 \
+docker build -t vdbmat-phase0-step10:blender4.5.11 \
   -f tools/phase0/Dockerfile.openvdb-cycles .
 docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp \
   -e PYTHONPATH=/work/src -v "$PWD:/work" -w /work \
-  vbdmat-phase0-step10:blender4.5.11 \
+  vdbmat-phase0-step10:blender4.5.11 \
   python3 -m pytest -q tests/integration/test_openvdb.py \
   tests/integration/test_blender_cycles.py
 ```

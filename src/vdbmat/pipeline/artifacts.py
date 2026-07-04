@@ -3,7 +3,7 @@
 This module owns the *content* of a run bundle's non-Zarr artifacts — the stable
 ``run.json`` / ``summary.json`` / ``validation.json`` schemas — and the deterministic
 checksum helpers the manifest links them by. It performs no orchestration and knows
-nothing about temporary directories or publication; :mod:`vbdmat.pipeline.runner`
+nothing about temporary directories or publication; :mod:`vdbmat.pipeline.runner`
 drives those. Everything here is pure given its inputs, so two identical runs produce
 byte-identical artifacts (ADR-007 D8), the sole exception being the isolated
 ``created_utc`` field that the runner injects into ``run.json``.
@@ -19,7 +19,7 @@ from typing import Any
 
 import numpy as np
 
-from vbdmat.core import (
+from vdbmat.core import (
     MaterialLabelVolume,
     OpticalPropertyVolume,
     SchemaIdentity,
@@ -27,12 +27,12 @@ from vbdmat.core import (
 )
 
 #: Schema of the run manifest (``run.json``).
-RUN_SCHEMA = SchemaIdentity(name="vbdmat.run", version=SchemaVersion(1, 0, 0))
+RUN_SCHEMA = SchemaIdentity(name="vdbmat.run", version=SchemaVersion(1, 0, 0))
 #: Schema of the diagnostics summary (``diagnostics/summary.json``).
-SUMMARY_SCHEMA = SchemaIdentity(name="vbdmat.summary", version=SchemaVersion(1, 0, 0))
+SUMMARY_SCHEMA = SchemaIdentity(name="vdbmat.summary", version=SchemaVersion(1, 0, 0))
 #: Schema of the per-asset validation report (``diagnostics/validation.json``).
 VALIDATION_SCHEMA = SchemaIdentity(
-    name="vbdmat.validation", version=SchemaVersion(1, 0, 0)
+    name="vdbmat.validation", version=SchemaVersion(1, 0, 0)
 )
 
 _READ_CHUNK_BYTES = 1 << 20

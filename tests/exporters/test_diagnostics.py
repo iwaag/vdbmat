@@ -3,8 +3,8 @@ from pathlib import Path
 
 import pytest
 
-from vbdmat.boundaries import CapabilityStatus
-from vbdmat.exporters.diagnostics import CapabilityEntry, CapabilityReport
+from vdbmat.boundaries import CapabilityStatus
+from vdbmat.exporters.diagnostics import CapabilityEntry, CapabilityReport
 
 
 def _report() -> CapabilityReport:
@@ -12,7 +12,7 @@ def _report() -> CapabilityReport:
         consumer="test-consumer",
         adapter="test-adapter",
         adapter_version="1.0.0",
-        schema_name="vbdmat.volume",
+        schema_name="vdbmat.volume",
         schema_version="1.0.0",
         entries=(
             CapabilityEntry(

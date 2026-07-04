@@ -2,7 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-06-28
-- **Decision owners:** VBDMAT maintainers
+- **Decision owners:** VDBMAT maintainers
 - **Phase:** 0, Step 8
 
 ## Context
@@ -135,7 +135,7 @@ IOR `1.52`, so their material boundary correctly creates no IOR interface.
 
 ## Adapter policies and mandatory diagnostics
 
-The policies are machine-readable in `vbdmat.boundaries.policies`.
+The policies are machine-readable in `vdbmat.boundaries.policies`.
 
 | Consumer | Canonical spatial `ior` | Derived interfaces | Required behavior |
 | --- | --- | --- | --- |

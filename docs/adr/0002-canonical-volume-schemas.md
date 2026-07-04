@@ -2,12 +2,12 @@
 
 - **Status:** Accepted
 - **Date:** 2026-06-28
-- **Decision owners:** VBDMAT maintainers
+- **Decision owners:** VDBMAT maintainers
 - **Phase:** 0, Step 2
 
 ## Context
 
-VBDMAT needs a renderer-neutral contract between intended material placement, future print-process models, optical mapping, persistence, and exporters. Material identifiers alone cannot describe effective appearance. Conversely, renderer-native density or shader parameters would couple the core to one consumer.
+VDBMAT needs a renderer-neutral contract between intended material placement, future print-process models, optical mapping, persistence, and exporters. Material identifiers alone cannot describe effective appearance. Conversely, renderer-native density or shader parameters would couple the core to one consumer.
 
 Phase 0 needs three logical asset types:
 
@@ -26,7 +26,7 @@ This ADR defines the logical data model. ADR-004 will define how it is laid out 
 Every asset declares:
 
 ```text
-schema_name = "vbdmat.volume"
+schema_name = "vdbmat.volume"
 schema_version = "1.0.0"
 asset_type = one of:
   "material-label"

@@ -15,7 +15,7 @@ def json_line(document: Mapping[str, Any]) -> str:
 def human_summary(document: Mapping[str, Any]) -> str:
     """Return a compact summary without duplicating the machine document."""
     status = str(document.get("status", "ok"))
-    operation = str(document.get("operation", "vbdmat"))
+    operation = str(document.get("operation", "vdbmat"))
     path = document.get("path") or document.get("output_path")
     suffix = f": {path}" if path is not None else ""
     return f"{operation}: {status}{suffix}\n"

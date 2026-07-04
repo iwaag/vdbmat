@@ -15,8 +15,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from vbdmat.core import MaterialLabelVolume, MaterialRole
-from vbdmat.fixtures import (
+from vdbmat.core import MaterialLabelVolume, MaterialRole
+from vdbmat.fixtures import (
     COUPON_MANIFEST_NAME,
     COUPON_PAYLOAD_NAME,
     WEDGE_MANIFEST_NAME,
@@ -24,8 +24,8 @@ from vbdmat.fixtures import (
     window_coupon_label,
     write_phase1_fixtures,
 )
-from vbdmat.io import read_material_label_manifest
-from vbdmat.io.errors import VoxelManifestError
+from vdbmat.io import read_material_label_manifest
+from vdbmat.io.errors import VoxelManifestError
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _INPUTS = _REPO_ROOT / "examples" / "phase1" / "inputs"

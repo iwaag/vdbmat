@@ -2,7 +2,7 @@
 
 **Date:** 2026-06-29
 
-**Adapter:** `vbdmat.exporters.openvdb` 1.0.0
+**Adapter:** `vdbmat.exporters.openvdb` 1.0.0
 
 **OpenVDB:** 10.0.1 (`python3-openvdb`, module `pyopenvdb`)
 
@@ -15,17 +15,17 @@ bindings are ABI-coupled native packages and are not available from the selected
 index. The reproducible optional environment is therefore isolated in Docker:
 
 ```bash
-docker build -t vbdmat-phase0-step10:blender4.5.11 \
+docker build -t vdbmat-phase0-step10:blender4.5.11 \
   -f tools/phase0/Dockerfile.openvdb-cycles .
 
 docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp \
   -e PYTHONPATH=/work/src -v "$PWD:/work" -w /work \
-  vbdmat-phase0-step10:blender4.5.11 \
+  vdbmat-phase0-step10:blender4.5.11 \
   python3 examples/phase0/export_openvdb_fixtures.py \
   .local/phase0/openvdb-step10-native
 
 docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp \
-  -v "$PWD:/work" -w /work vbdmat-phase0-step10:blender4.5.11 \
+  -v "$PWD:/work" -w /work vdbmat-phase0-step10:blender4.5.11 \
   python3 examples/phase0/render_blender_fixtures.py \
   .local/phase0/openvdb-step10-native \
   .local/phase0/cycles-step10-native --blender blender
@@ -35,7 +35,7 @@ The first command writes one `.vdb`, `openvdb-manifest.json`, and
 `capabilities.json` per fixture. The second invokes Blender in background mode for
 every manifest and writes a PNG, `.blend`, and hash report. No scene edits are needed.
 
-The installed image is `vbdmat-phase0-step10:blender4.5.11`. Native OpenVDB readback
+The installed image is `vdbmat-phase0-step10:blender4.5.11`. Native OpenVDB readback
 and Blender integration tests both pass. All six fixtures load and render without
 scene edits, producing `.vdb`, PNG, and `.blend` artifacts under the two `-native`
 directories above. The Ubuntu Blender 4.0.2 package crashed inside Cycles for even a

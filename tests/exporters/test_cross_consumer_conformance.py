@@ -11,14 +11,14 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from vbdmat.conformance import (
+from vdbmat.conformance import (
     ConformanceLayer,
     check_fixture_conformance,
     check_png_sanity,
     png_pixel_sha256,
 )
-from vbdmat.fixtures import all_synthetic_fixtures, layered_material_slab
-from vbdmat.optics import map_material_volume_to_optical, phase0_provisional_mapping
+from vdbmat.fixtures import all_synthetic_fixtures, layered_material_slab
+from vdbmat.optics import map_material_volume_to_optical, phase0_provisional_mapping
 
 
 def _mapped(fixture):  # type: ignore[no-untyped-def]

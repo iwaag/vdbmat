@@ -1,5 +1,5 @@
 {
-  "format": "vbdmat.voxels",
+  "format": "vdbmat.voxels",
   "format_version": "1.0.0",
   "asset_type": "material-label",
   "payload": {
@@ -61,7 +61,7 @@
     }
   ],
   "source": {
-    "generator": "vbdmat.fixtures.phase1",
+    "generator": "vdbmat.fixtures.phase1",
     "generator_version": "1.0.0",
     "identity": "stepped-wedge",
     "notes": "Phase 1 single-material stepped wedge; analytic staircase occupancy standing in for an external geometry-to-voxel generator (ADR-009). Research fixture, not a printer-vendor format."

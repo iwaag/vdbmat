@@ -1,9 +1,9 @@
 # ADR-006: Phase 1 Inputs and Voxelization
 
 - **Status:** Accepted; mesh-input sections superseded by ADR-009 (the core accepts
-  only the `vbdmat.voxels` manifest; mesh voxelization is a future external tool)
+  only the `vdbmat.voxels` manifest; mesh voxelization is a future external tool)
 - **Date:** 2026-07-01
-- **Decision owners:** VBDMAT maintainers
+- **Decision owners:** VDBMAT maintainers
 - **Phase:** 1, Step 1
 
 ## Context
@@ -12,7 +12,7 @@ Phase 0 froze the canonical volume contracts (ADR-001 through ADR-005): metre wo
 space, semantic XYZ over ZYX storage, cell-centred sampling, immutable
 `MaterialLabelVolume` / `MaterialMixtureVolume` / `OpticalPropertyVolume`, and exact
 Zarr v3 persistence. Phase 0 built those volumes only from Python fixture code
-(`vbdmat.fixtures.synthetic`).
+(`vdbmat.fixtures.synthetic`).
 
 Phase 1 must let a user supply material placement and simple geometry *without writing
 Python*, and turn that input into a validated canonical `MaterialLabelVolume`. Two
@@ -41,7 +41,7 @@ format is retained as the canonical test fixture.
 
 ## Decision
 
-### D1. Direct material-voxel interchange: `vbdmat.voxels/1.0.0`
+### D1. Direct material-voxel interchange: `vdbmat.voxels/1.0.0`
 
 The direct-voxel input is a UTF-8 JSON manifest plus one NumPy `.npy` label payload:
 
@@ -54,7 +54,7 @@ The manifest is a JSON object with these required fields:
 
 | Field | Type | Meaning |
 | --- | --- | --- |
-| `format` | string | Must equal `"vbdmat.voxels"`. |
+| `format` | string | Must equal `"vdbmat.voxels"`. |
 | `format_version` | string | `MAJOR.MINOR.PATCH`; Phase 1 accepts major `1`. |
 | `asset_type` | string | Must equal `"material-label"`. |
 | `payload.path` | string | Relative POSIX path to the `.npy`, resolved only beneath the manifest directory. |
@@ -91,7 +91,7 @@ silent default:
 all topology inspection and voxelization semantics. No third-party mesh library is
 added. Rationale: binary/ASCII STL parsing is small and fully specified; the plan's
 stop conditions treat mesh-dependency licensing/ABI/core-install cost as a gate; and
-voxelization correctness must be VBDMAT-owned and analytically tested regardless of any
+voxelization correctness must be VDBMAT-owned and analytically tested regardless of any
 library. If a future solid class makes an external parser demonstrably safer than owned
 code, the addition and its uv-lock impact will be recorded in a superseding decision.
 This choice adds **zero** new runtime dependencies to the core environment.
@@ -132,7 +132,7 @@ declared}` and the interior is filled with `--material-id`.
 
 ```json
 {
-  "generator": "vbdmat.voxels",
+  "generator": "vdbmat.voxels",
   "generator_version": "1.0.0",
   "identity": "window-coupon",
   "notes": "provisional research interchange"
@@ -141,7 +141,7 @@ declared}` and the interior is filled with `--material-id`.
 
 The reader records the *format identity and payload checksum* in provenance so the
 source is chainable downstream: `provenance.sources` includes
-`"vbdmat.voxels/1.0.0"` and `"sha256:<payload digest>"`, and `notes` may carry the
+`"vdbmat.voxels/1.0.0"` and `"sha256:<payload digest>"`, and `notes` may carry the
 declared `identity`. `created_utc` and `configuration_digest` are set later by the
 pipeline (ADR-007), not by the reader. Payload integrity is verified by recomputing
 SHA-256 over the raw `.npy` bytes and comparing to `payload.sha256` **before** the array
@@ -295,7 +295,7 @@ occupancy case.
 - transparent matrix, one white inclusion, one asymmetric black marker, background;
 - features must **not** be symmetric across X, Y, or Z so a render exposes axis
   reversal;
-- imported through the `vbdmat.voxels/1.0.0` manifest (no Python fixture construction);
+- imported through the `vdbmat.voxels/1.0.0` manifest (no Python fixture construction);
 - analytic expectations recorded with the Step 4 fixture: `shape_zyx`, per-material cell
   counts, marker/inclusion cell coordinates, bounds, transform, and payload SHA-256.
 

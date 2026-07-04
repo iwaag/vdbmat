@@ -26,10 +26,10 @@ RUN apt-get update \
 # reader in an isolated system-site-packages venv.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends python3-venv \
-    && python3 -m venv --system-site-packages /opt/vbdmat-venv \
-    && /opt/vbdmat-venv/bin/pip install --no-cache-dir \
+    && python3 -m venv --system-site-packages /opt/vdbmat-venv \
+    && /opt/vdbmat-venv/bin/pip install --no-cache-dir \
         "numpy==1.26.4" "zarr==3.0.10" \
     && rm -rf /var/lib/apt/lists/*
 
-ENV PATH=/opt/vbdmat-venv/bin:/opt/blender:${PATH}
+ENV PATH=/opt/vdbmat-venv/bin:/opt/blender:${PATH}
 WORKDIR /work

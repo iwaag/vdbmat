@@ -6,7 +6,7 @@ from dataclasses import FrozenInstanceError
 import numpy as np
 import pytest
 
-from vbdmat.core import GridGeometry
+from vdbmat.core import GridGeometry
 
 TRANSLATED = (
     (1.0, 0.0, 0.0, 0.010),

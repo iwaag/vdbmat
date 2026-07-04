@@ -4,7 +4,7 @@
 
 This mapping proves the canonical material-to-optical data flow. Every value in this document is **provisional and uncalibrated**. The values must not be presented as measurements of a printer or resin.
 
-The implementation is `vbdmat.optics` and the stable rule identifier is `linear-volume-fraction-v1`.
+The implementation is `vdbmat.optics` and the stable rule identifier is `linear-volume-fraction-v1`.
 
 ## Inputs and Output
 

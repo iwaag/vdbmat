@@ -5,7 +5,7 @@ from types import MappingProxyType
 
 import pytest
 
-from vbdmat.core import MaterialDefinition, MaterialPalette, MaterialRole
+from vdbmat.core import MaterialDefinition, MaterialPalette, MaterialRole
 
 
 def background() -> MaterialDefinition:

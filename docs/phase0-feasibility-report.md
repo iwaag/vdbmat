@@ -1,8 +1,8 @@
 # Phase 0 Feasibility Report
 
 **Review date:** 2026-06-29  
-**Schema:** `vbdmat.volume` 1.0.0  
-**Package:** `vbdmat` 0.1.0  
+**Schema:** `vdbmat.volume` 1.0.0  
+**Package:** `vdbmat` 0.1.0  
 **Decision:** Proceed to Phase 1 without revising the Phase 0 foundation
 
 ## Executive conclusion
@@ -114,7 +114,7 @@ passes 251 tests with only the two OpenVDB/Blender tests skipped.
 ### OpenVDB and Blender
 
 The optional native stack is isolated in Docker image
-`vbdmat-phase0-step10:blender4.5.11`:
+`vdbmat-phase0-step10:blender4.5.11`:
 
 | Component | Tested version |
 | --- | --- |
@@ -134,7 +134,7 @@ The selected layout is:
 
 ```text
 asset.zarr/
-  zarr.json              # root group and vbdmat manifest
+  zarr.json              # root group and vdbmat manifest
   arrays/
     zarr.json
     <canonical fields>/  # one array per canonical field
@@ -235,11 +235,11 @@ None of these blocks starting Phase 1, but each must remain explicit.
 
 ## Roadmap changes justified by the proofs
 
-1. Keep `vbdmat.volume` 1.0.0 and the five accepted ADRs as the Phase 1 foundation;
+1. Keep `vdbmat.volume` 1.0.0 and the five accepted ADRs as the Phase 1 foundation;
    no migration is needed.
 2. Treat calibration and measured validation as the first Phase 1 scientific gate,
    ahead of renderer polish.
-3. Add process/mixing models behind `vbdmat.optics`; do not add printer physics to
+3. Add process/mixing models behind `vdbmat.optics`; do not add printer physics to
    core volume types.
 4. Develop merged region boundaries as a derived asset, not a required canonical
    field.
@@ -279,12 +279,12 @@ uv run --group mitsuba python examples/phase0/render_mitsuba_fixtures.py \
 OpenVDB/Cycles proof:
 
 ```bash
-docker build -t vbdmat-phase0-step10:blender4.5.11 \
+docker build -t vdbmat-phase0-step10:blender4.5.11 \
   -f tools/phase0/Dockerfile.openvdb-cycles .
 
 docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp \
   -e PYTHONPATH=/work/src -v "$PWD:/work" -w /work \
-  vbdmat-phase0-step10:blender4.5.11 \
+  vdbmat-phase0-step10:blender4.5.11 \
   python3 -m pytest -q tests/integration/test_openvdb.py \
   tests/integration/test_blender_cycles.py
 ```

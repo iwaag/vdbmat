@@ -3,18 +3,18 @@ from dataclasses import replace
 import numpy as np
 import pytest
 
-from vbdmat.boundaries import CapabilityStatus
-from vbdmat.exporters.mitsuba import (
+from vdbmat.boundaries import CapabilityStatus
+from vdbmat.exporters.mitsuba import (
     MitsubaExportConfig,
     convert_optical_fields,
     mitsuba_capability_report,
 )
-from vbdmat.fixtures import (
+from vdbmat.fixtures import (
     anisotropic_axis_marker,
     homogeneous_transparent,
     layered_material_slab,
 )
-from vbdmat.optics import (
+from vdbmat.optics import (
     map_material_volume_to_optical,
     phase0_provisional_mapping,
 )

@@ -2,7 +2,7 @@
 
 Deterministic: rerunning this script reproduces byte-identical, human-reviewable
 ``config.json`` documents under ``examples/phase1/configs/``. Paths are portable and
-relative to each config file's own directory; ``vbdmat run CONFIG`` resolves them
+relative to each config file's own directory; ``vdbmat run CONFIG`` resolves them
 against the config's directory (see ADR-007/ADR-008 and plan Step 5).
 
 Usage::
@@ -15,7 +15,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from vbdmat.pipeline import InputKind, PipelineConfig
+from vdbmat.pipeline import InputKind, PipelineConfig
 
 CONFIGS = Path(__file__).parent / "configs"
 

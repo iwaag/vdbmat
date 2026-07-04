@@ -2,7 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-07-01
-- **Decision owners:** VBDMAT maintainers
+- **Decision owners:** VDBMAT maintainers
 - **Phase:** 1, Step 1
 
 ## Context
@@ -33,8 +33,8 @@ load/voxelize -> validate material -> persist material
 
 Each stage has typed inputs and outputs (Python objects), a stable name, and a status
 (`ok` / `skipped` / `failed`). `load/voxelize` uses the ADR-006 reader/voxelizer;
-`map optics` uses `vbdmat.optics` with an `OpticalMappingConfig`; persistence uses the
-existing `vbdmat.io.zarr` API unchanged. Optional `export` (ADR-008/Step 8) consumes the
+`map optics` uses `vdbmat.optics` with an `OpticalMappingConfig`; persistence uses the
+existing `vdbmat.io.zarr` API unchanged. Optional `export` (ADR-008/Step 8) consumes the
 **persisted/restored** `optical.zarr`, never a hidden in-memory optical volume. No
 renderer state enters any stage before `export`.
 
@@ -83,9 +83,9 @@ already lives in the Zarr manifests.
 
 ### D5. `run.json` contents
 
-`run.json` is a JSON object with a stable schema `vbdmat.run/1.0.0`:
+`run.json` is a JSON object with a stable schema `vdbmat.run/1.0.0`:
 
-- `schema`: `{ "name": "vbdmat.run", "version": "1.0.0" }`;
+- `schema`: `{ "name": "vdbmat.run", "version": "1.0.0" }`;
 - `run_id`;
 - `created_utc`: ISO-8601 UTC timestamp — **isolated** from the deterministic payload
   and excluded from content comparison (D8);
@@ -98,7 +98,7 @@ already lives in the Zarr manifests.
   Zarr asset checksum is a deterministic digest over the store's array bytes + manifest
   (defined by the Step 6 hashing helper), not a single-file hash;
 - `provenance`: the chain in D6;
-- `versions`: `vbdmat` version, and adapter/renderer versions when export ran.
+- `versions`: `vdbmat` version, and adapter/renderer versions when export ran.
 
 ### D6. Provenance chaining
 
@@ -152,7 +152,7 @@ schema 1.0.0; the run bundle adds **no** new interpretation of volume metadata.
 
 ## Worked Example: window-coupon run bundle
 
-Input: the direct-voxel window coupon (`vbdmat.voxels/1.0.0`); mapping:
+Input: the direct-voxel window coupon (`vdbmat.voxels/1.0.0`); mapping:
 `phase0-provisional-materials-v1` (digest `sha256:…`); no export requested.
 
 ```text
@@ -173,7 +173,7 @@ run/
 
 ```json
 {
-  "schema": { "name": "vbdmat.summary", "version": "1.0.0" },
+  "schema": { "name": "vdbmat.summary", "version": "1.0.0" },
   "geometry": { "shape_zyx": [nz, ny, nx], "voxel_size_xyz_m": [sx, sy, sz] },
   "material": {
     "counts": { "0": n0, "1": n1, "2": n2, "3": n3 },

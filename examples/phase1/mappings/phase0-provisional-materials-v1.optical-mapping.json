@@ -1,5 +1,5 @@
 {
-  "format": "vbdmat.optical-mapping",
+  "format": "vdbmat.optical-mapping",
   "format_version": "1.0.0",
   "configuration_id": "phase0-provisional-materials-v1",
   "version": "1.0.0",

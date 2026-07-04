@@ -2,7 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-06-28
-- **Decision owners:** VBDMAT maintainers
+- **Decision owners:** VDBMAT maintainers
 - **Phase:** 0, Step 9
 
 ## Context
@@ -38,8 +38,8 @@ An `unsupported` entry is not permission to omit diagnostics. If an approximatio
 disabled or cannot be built, export must either fail clearly or retain the unsupported
 entry in the report.
 
-Renderer imports are lazy and remain below `vbdmat.exporters`. Importing `vbdmat`,
-`vbdmat.core`, or running the core test suite must not require optional renderer
+Renderer imports are lazy and remain below `vdbmat.exporters`. Importing `vdbmat`,
+`vdbmat.core`, or running the core test suite must not require optional renderer
 bindings. Renderer scenes, tensors, meshes, node graphs, color conversion, coefficient
 conversion, interpolation, and integrator settings are adapter state.
 

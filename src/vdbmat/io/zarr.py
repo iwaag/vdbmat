@@ -15,12 +15,12 @@ import numpy as np
 import zarr
 from zarr.codecs import BloscCodec, BloscShuffle
 
-from vbdmat.core.geometry import GridGeometry
-from vbdmat.core.materials import MaterialDefinition, MaterialPalette, MaterialRole
-from vbdmat.core.metadata import VOLUME_SCHEMA, Provenance, SchemaVersion
-from vbdmat.core.optical_basis import OpticalBasis, OpticalBasisKind
-from vbdmat.core.transforms import Matrix4
-from vbdmat.core.volumes import (
+from vdbmat.core.geometry import GridGeometry
+from vdbmat.core.materials import MaterialDefinition, MaterialPalette, MaterialRole
+from vdbmat.core.metadata import VOLUME_SCHEMA, Provenance, SchemaVersion
+from vdbmat.core.optical_basis import OpticalBasis, OpticalBasisKind
+from vdbmat.core.transforms import Matrix4
+from vdbmat.core.volumes import (
     MaterialLabelVolume,
     MaterialMixtureVolume,
     OpticalPropertyVolume,
@@ -35,7 +35,7 @@ CanonicalVolume: TypeAlias = (
 PathLike: TypeAlias = str | os.PathLike[str]
 RegionZYX: TypeAlias = tuple[slice, slice, slice]
 
-_MANIFEST_ATTRIBUTE = "vbdmat"
+_MANIFEST_ATTRIBUTE = "vdbmat"
 _LENGTH_UNIT = "m"
 _FORMAT_NAME = "zarr-v3-directory"
 _COMPRESSOR = BloscCodec(cname="zstd", clevel=5, shuffle=BloscShuffle.bitshuffle)
@@ -125,28 +125,28 @@ def inspect_volume(path: PathLike) -> VolumeInspection:
     asset_type = _asset_type(manifest)
     schema_name, schema_version = _schema_metadata(manifest)
     geometry = _geometry(manifest)
-    declarations = _mapping(manifest.get("arrays"), "vbdmat.arrays")
+    declarations = _mapping(manifest.get("arrays"), "vdbmat.arrays")
     arrays_group = _required_group(root, "arrays")
 
     inspected: list[ArrayInspection] = []
     for name, expected in _required_fields(asset_type).items():
-        declaration = _mapping(declarations.get(name), f"vbdmat.arrays.{name}")
+        declaration = _mapping(declarations.get(name), f"vdbmat.arrays.{name}")
         array = _required_array(arrays_group, name)
         dimensions = _string_tuple(
-            declaration.get("dimensions"), f"vbdmat.arrays.{name}.dimensions"
+            declaration.get("dimensions"), f"vdbmat.arrays.{name}.dimensions"
         )
-        unit = _string(declaration.get("unit"), f"vbdmat.arrays.{name}.unit")
-        dtype = _string(declaration.get("dtype"), f"vbdmat.arrays.{name}.dtype")
+        unit = _string(declaration.get("unit"), f"vdbmat.arrays.{name}.unit")
+        dtype = _string(declaration.get("dtype"), f"vdbmat.arrays.{name}.dtype")
         declared_shape = _integer_tuple(
-            declaration.get("shape"), f"vbdmat.arrays.{name}.shape"
+            declaration.get("shape"), f"vdbmat.arrays.{name}.shape"
         )
         if dimensions != expected[0]:
             raise VolumeIOError(
-                f"vbdmat.arrays.{name}.dimensions", f"expected {expected[0]}"
+                f"vdbmat.arrays.{name}.dimensions", f"expected {expected[0]}"
             )
         if unit != expected[1]:
             raise VolumeIOError(
-                f"vbdmat.arrays.{name}.unit", f"expected {expected[1]!r}"
+                f"vdbmat.arrays.{name}.unit", f"expected {expected[1]!r}"
             )
         if dtype != expected[2] or np.dtype(array.dtype).name != expected[2]:
             raise VolumeIOError(
@@ -224,7 +224,7 @@ def read_optical_region(path: PathLike, region_zyx: RegionZYX) -> OpticalPropert
     root, manifest, inspection = _validated_asset(path)
     _require_runtime_schema(inspection.schema_name, inspection.schema_version)
     if inspection.asset_type is not VolumeAssetType.OPTICAL_PROPERTY:
-        raise VolumeIOError("vbdmat.asset_type", "must be 'optical-property'")
+        raise VolumeIOError("vdbmat.asset_type", "must be 'optical-property'")
     normalized, starts, shape = _normalize_region(
         region_zyx, inspection.geometry.shape_zyx
     )
@@ -348,28 +348,28 @@ def _chunk_shape(shape: Sequence[int]) -> tuple[int, ...]:
 
 
 def _asset_type(manifest: Mapping[str, Any]) -> VolumeAssetType:
-    value = _string(manifest.get("asset_type"), "vbdmat.asset_type")
+    value = _string(manifest.get("asset_type"), "vdbmat.asset_type")
     try:
         return VolumeAssetType(value)
     except ValueError as error:
         raise VolumeIOError(
-            "vbdmat.asset_type", f"unsupported value {value!r}"
+            "vdbmat.asset_type", f"unsupported value {value!r}"
         ) from error
 
 
 def _schema_metadata(manifest: Mapping[str, Any]) -> tuple[str, str]:
-    schema = _mapping(manifest.get("schema"), "vbdmat.schema")
-    name = _string(schema.get("name"), "vbdmat.schema.name")
-    version_text = _string(schema.get("version"), "vbdmat.schema.version")
+    schema = _mapping(manifest.get("schema"), "vdbmat.schema")
+    name = _string(schema.get("name"), "vdbmat.schema.name")
+    version_text = _string(schema.get("version"), "vdbmat.schema.version")
     try:
         version = SchemaVersion.parse(version_text)
     except (TypeError, ValueError) as error:
-        raise VolumeIOError("vbdmat.schema.version", str(error)) from error
+        raise VolumeIOError("vdbmat.schema.version", str(error)) from error
     if name != VOLUME_SCHEMA.name:
-        raise VolumeIOError("vbdmat.schema.name", f"unsupported schema {name!r}")
+        raise VolumeIOError("vdbmat.schema.name", f"unsupported schema {name!r}")
     if version.major != VOLUME_SCHEMA.version.major:
         raise VolumeIOError(
-            "vbdmat.schema.version",
+            "vdbmat.schema.version",
             f"incompatible major version {version.major}; "
             f"expected {VOLUME_SCHEMA.version.major}",
         )
@@ -380,16 +380,16 @@ def _require_runtime_schema(name: str, version_text: str) -> None:
     version = SchemaVersion.parse(version_text)
     if name != VOLUME_SCHEMA.name or version.minor != VOLUME_SCHEMA.version.minor:
         raise VolumeIOError(
-            "vbdmat.schema.version",
+            "vdbmat.schema.version",
             f"runtime supports {VOLUME_SCHEMA.name} 1.0.x; found {name} {version}",
         )
 
 
 def _geometry(manifest: Mapping[str, Any]) -> GridGeometry:
-    value = _mapping(manifest.get("geometry"), "vbdmat.geometry")
-    unit = _string(value.get("length_unit"), "vbdmat.geometry.length_unit")
+    value = _mapping(manifest.get("geometry"), "vdbmat.geometry")
+    unit = _string(value.get("length_unit"), "vdbmat.geometry.length_unit")
     if unit != _LENGTH_UNIT:
-        raise VolumeIOError("vbdmat.geometry.length_unit", "must be 'm'")
+        raise VolumeIOError("vdbmat.geometry.length_unit", "must be 'm'")
     try:
         return GridGeometry(
             shape_zyx=cast(
@@ -415,11 +415,11 @@ def _geometry(manifest: Mapping[str, Any]) -> GridGeometry:
             ),
         )
     except (TypeError, ValueError) as error:
-        raise VolumeIOError("vbdmat.geometry", str(error)) from error
+        raise VolumeIOError("vdbmat.geometry", str(error)) from error
 
 
 def _provenance(manifest: Mapping[str, Any]) -> Provenance:
-    value = _mapping(manifest.get("provenance"), "vbdmat.provenance")
+    value = _mapping(manifest.get("provenance"), "vdbmat.provenance")
     created = value.get("created_utc")
     try:
         return Provenance(
@@ -435,15 +435,15 @@ def _provenance(manifest: Mapping[str, Any]) -> Provenance:
             notes=cast(str | None, value.get("notes")),
         )
     except (TypeError, ValueError) as error:
-        raise VolumeIOError("vbdmat.provenance", str(error)) from error
+        raise VolumeIOError("vdbmat.provenance", str(error)) from error
 
 
 def _palette(manifest: Mapping[str, Any]) -> MaterialPalette:
-    entries = _sequence(manifest.get("palette"), "vbdmat.palette")
+    entries = _sequence(manifest.get("palette"), "vdbmat.palette")
     materials: list[MaterialDefinition] = []
     try:
         for index, item in enumerate(entries):
-            value = _mapping(item, f"vbdmat.palette[{index}]")
+            value = _mapping(item, f"vdbmat.palette[{index}]")
             materials.append(
                 MaterialDefinition(
                     material_id=_integer(
@@ -459,11 +459,11 @@ def _palette(manifest: Mapping[str, Any]) -> MaterialPalette:
             )
         return MaterialPalette.from_sequence(materials)
     except (TypeError, ValueError) as error:
-        raise VolumeIOError("vbdmat.palette", str(error)) from error
+        raise VolumeIOError("vdbmat.palette", str(error)) from error
 
 
 def _optical_basis(manifest: Mapping[str, Any]) -> OpticalBasis:
-    value = _mapping(manifest.get("optical_basis"), "vbdmat.optical_basis")
+    value = _mapping(manifest.get("optical_basis"), "vdbmat.optical_basis")
     try:
         return OpticalBasis(
             kind=OpticalBasisKind(_string(value.get("kind"), "basis.kind")),
@@ -474,7 +474,7 @@ def _optical_basis(manifest: Mapping[str, Any]) -> OpticalBasis:
             transfer=cast(str | None, value.get("transfer")),
         )
     except (TypeError, ValueError) as error:
-        raise VolumeIOError("vbdmat.optical_basis", str(error)) from error
+        raise VolumeIOError("vdbmat.optical_basis", str(error)) from error
 
 
 def _normalize_region(

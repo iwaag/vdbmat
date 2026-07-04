@@ -13,13 +13,13 @@ them physically near-invisible (this is the root cause of the historic all-black
   * a lit **stage** (patterned backdrop + floor + environment) so the transparent
     object refracts something recognisable and reads as glass.
 
-Invoke inside Blender's Python (the pinned ``vbdmat-openvdb-cycles`` image):
+Invoke inside Blender's Python (the pinned ``vdbmat-openvdb-cycles`` image):
 
     blender --background --python examples/phase1/demo/blender_glass_demo.py -- \
         MITSUBA_EXPORT_DIR OUTPUT_PNG [--ior 1.48] [--samples 96] [--size 400]
 
 ``MITSUBA_EXPORT_DIR`` is a directory containing ``exterior-*.ply`` (from
-``vbdmat export mitsuba``). The script prints ``PIXELSTATS`` (min/max/mean/std of the
+``vdbmat export mitsuba``). The script prints ``PIXELSTATS`` (min/max/mean/std of the
 rendered pixels), which is a cheap, headless regression signal: a std near zero means
 nothing rendered (empty frame), a healthy std means the object is actually visible.
 """
@@ -66,7 +66,7 @@ def _import_ply(path: Path) -> bpy.types.Object:
 
 
 def _glass_material(ior: float) -> bpy.types.Material:
-    material = bpy.data.materials.new("vbdmat-glass")
+    material = bpy.data.materials.new("vdbmat-glass")
     material.use_nodes = True
     tree = material.node_tree
     nodes = tree.nodes
@@ -95,7 +95,7 @@ def _patterned_backdrop(center: Vector, radius: float) -> None:
     bpy.ops.mesh.primitive_plane_add(size=radius * 20, location=center + Vector((0, radius * 6, 0)))
     plane = bpy.context.active_object
     plane.rotation_euler = (1.5708, 0.0, 0.0)
-    material = bpy.data.materials.new("vbdmat-backdrop")
+    material = bpy.data.materials.new("vdbmat-backdrop")
     material.use_nodes = True
     nodes = material.node_tree.nodes
     principled = nodes.get("Principled BSDF")
@@ -110,7 +110,7 @@ def _patterned_backdrop(center: Vector, radius: float) -> None:
 def _floor(center: Vector, radius: float, floor_z: float) -> None:
     bpy.ops.mesh.primitive_plane_add(size=radius * 30, location=(center.x, center.y, floor_z))
     floor = bpy.context.active_object
-    material = bpy.data.materials.new("vbdmat-floor")
+    material = bpy.data.materials.new("vdbmat-floor")
     material.use_nodes = True
     material.node_tree.nodes.get("Principled BSDF").inputs["Base Color"].default_value = (
         0.35,
@@ -125,7 +125,7 @@ def main() -> None:
     args = _parse_args()
     exteriors = sorted(args.export_dir.glob("exterior-*.ply"))
     if not exteriors:
-        raise SystemExit(f"no exterior-*.ply in {args.export_dir}; run `vbdmat export mitsuba` first")
+        raise SystemExit(f"no exterior-*.ply in {args.export_dir}; run `vdbmat export mitsuba` first")
 
     bpy.ops.wm.read_factory_settings(use_empty=True)
     scene = bpy.context.scene
@@ -161,7 +161,7 @@ def main() -> None:
     _patterned_backdrop(center, radius)
     _floor(center, radius, lower.z)
 
-    scene.world = bpy.data.worlds.new("vbdmat-world")
+    scene.world = bpy.data.worlds.new("vdbmat-world")
     scene.world.use_nodes = True
     background = scene.world.node_tree.nodes["Background"]
     background.inputs["Color"].default_value = (0.28, 0.32, 0.4, 1.0)

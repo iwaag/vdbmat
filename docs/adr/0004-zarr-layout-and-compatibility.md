@@ -13,12 +13,12 @@ volume.
 ## Decision
 
 Phase 0 assets use Zarr format 3 directory stores. The root group contains a
-`vbdmat` attribute holding the common manifest and an `arrays` child group holding
+`vdbmat` attribute holding the common manifest and an `arrays` child group holding
 the canonical arrays.
 
 ```text
 <asset>.zarr/
-  zarr.json                         # root group and vbdmat manifest
+  zarr.json                         # root group and vdbmat manifest
   arrays/
     zarr.json
     material_id/                    # material-label only

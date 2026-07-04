@@ -1,4 +1,4 @@
-"""Strict reader/writer for the ``vbdmat.optical-mapping`` interchange (ADR-009 D3).
+"""Strict reader/writer for the ``vdbmat.optical-mapping`` interchange (ADR-009 D3).
 
 An optical mapping supplied as data carries exactly the fields of
 :class:`OpticalMappingConfig`, so a mapping's canonical JSON and digest are
@@ -17,7 +17,7 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any, cast
 
-from vbdmat.core import OpticalBasis, SchemaVersion
+from vdbmat.core import OpticalBasis, SchemaVersion
 
 from .config import (
     MaterialOpticalProperties,
@@ -26,7 +26,7 @@ from .config import (
 )
 from .errors import OpticalMappingError
 
-FORMAT_NAME = "vbdmat.optical-mapping"
+FORMAT_NAME = "vdbmat.optical-mapping"
 SUPPORTED_MAJOR = 1
 
 _ALLOWED_TOP_LEVEL = frozenset(
@@ -50,7 +50,7 @@ _ALLOWED_MATERIAL = frozenset(
 
 
 def optical_mapping_to_json_dict(config: OpticalMappingConfig) -> dict[str, Any]:
-    """Return the portable ``vbdmat.optical-mapping/1.0.0`` document of a mapping."""
+    """Return the portable ``vdbmat.optical-mapping/1.0.0`` document of a mapping."""
     basis = config.optical_basis
     return {
         "format": FORMAT_NAME,
@@ -82,7 +82,7 @@ def optical_mapping_to_json_dict(config: OpticalMappingConfig) -> dict[str, Any]
 
 
 def write_optical_mapping(path: str | Path, config: OpticalMappingConfig) -> Path:
-    """Write a mapping as a reviewable ``vbdmat.optical-mapping`` JSON document."""
+    """Write a mapping as a reviewable ``vdbmat.optical-mapping`` JSON document."""
     destination = Path(path)
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_text(
@@ -93,7 +93,7 @@ def write_optical_mapping(path: str | Path, config: OpticalMappingConfig) -> Pat
 
 
 def load_optical_mapping(path: str | Path) -> OpticalMappingConfig:
-    """Read and validate a ``vbdmat.optical-mapping`` document into a config."""
+    """Read and validate a ``vdbmat.optical-mapping`` document into a config."""
     source = Path(path)
     try:
         text = source.read_text(encoding="utf-8")

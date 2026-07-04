@@ -1,6 +1,6 @@
 # Material Identity Contract
 
-This document expands ADR-009 D4: material identity in VBDMAT has exactly two
+This document expands ADR-009 D4: material identity in VDBMAT has exactly two
 layers, and code or data that conflates them is defective.
 
 ## Layer 1 — Simulation contract (`material_id` + `name`)
@@ -24,7 +24,7 @@ The contract between external voxel generators and the core's optical mapping:
 Identifies real printer materials: vendor SKUs, batches, cartridge codes. It lives
 only in the voxel manifest's palette entries, as provenance:
 
-- `external_id` never appears in a `vbdmat.optical-mapping` document (the reader
+- `external_id` never appears in a `vdbmat.optical-mapping` document (the reader
   rejects it) and never participates in coefficient lookup.
 - A future calibrated material library (Phase 3) will key measured coefficient
   sets on this layer — scoped to printer, batch, and print mode — and *emit*

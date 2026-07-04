@@ -6,7 +6,7 @@ Implements ADR-007: a fixed, typed stage sequence
          -> map optics -> validate optical -> persist optical
          -> summarize -> optional export
 
-driven from a :class:`~vbdmat.pipeline.config.PipelineConfig`. The canonical bundle is
+driven from a :class:`~vdbmat.pipeline.config.PipelineConfig`. The canonical bundle is
 built inside a sibling temporary directory and published by a single atomic directory
 rename, so an interrupted run never leaves a valid-looking partial ``run/`` (ADR-007
 D7). The ``run_id`` is derived only from scientific inputs — configuration digest,
@@ -33,18 +33,18 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
-import vbdmat
-from vbdmat.core import (
+import vdbmat
+from vdbmat.core import (
     MaterialLabelVolume,
     OpticalPropertyVolume,
     Provenance,
 )
-from vbdmat.io.voxel_manifest import (
+from vdbmat.io.voxel_manifest import (
     inspect_material_label_manifest,
     read_material_label_manifest,
 )
-from vbdmat.io.zarr import read_volume, write_volume
-from vbdmat.optics import map_material_volume_to_optical
+from vdbmat.io.zarr import read_volume, write_volume
+from vdbmat.optics import map_material_volume_to_optical
 
 from . import artifacts
 from .config import ExportTarget, PipelineConfig
@@ -204,7 +204,7 @@ def run_pipeline(
             mapping_digest=mapping_digest,
             source_files=source_files,
             stages=stages,
-            versions={"vbdmat": vbdmat.__version__},
+            versions={"vdbmat": vdbmat.__version__},
         )
         (temporary / RUN_MANIFEST_NAME).write_text(
             json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
@@ -286,7 +286,7 @@ def _restamp(volume: Any, config_digest: str, extra_sources: tuple[str, ...]) ->
 
 def _validate(zarr_path: Path, enabled: bool, asset_type: str) -> dict[str, Any]:
     """Validate a persisted asset by fully reading it back (ADR-007 D7)."""
-    schema = "vbdmat.volume/1.0.0"
+    schema = "vdbmat.volume/1.0.0"
     entry: dict[str, Any] = {
         "path": zarr_path.name,
         "asset_type": asset_type,
@@ -387,11 +387,11 @@ def _build_manifest(
 
 
 _ASSET_SCHEMAS = {
-    CONFIG_NAME: "vbdmat.pipeline-config/2.0.0",
-    MATERIAL_ZARR: "vbdmat.volume/1.0.0",
-    OPTICAL_ZARR: "vbdmat.volume/1.0.0",
-    SUMMARY_NAME: "vbdmat.summary/1.0.0",
-    VALIDATION_NAME: "vbdmat.validation/1.0.0",
+    CONFIG_NAME: "vdbmat.pipeline-config/2.0.0",
+    MATERIAL_ZARR: "vdbmat.volume/1.0.0",
+    OPTICAL_ZARR: "vdbmat.volume/1.0.0",
+    SUMMARY_NAME: "vdbmat.summary/1.0.0",
+    VALIDATION_NAME: "vdbmat.validation/1.0.0",
 }
 
 
@@ -516,7 +516,7 @@ def _default_export_runner(
     target: ExportTarget, optical_zarr: Path, destination: Path
 ) -> Mapping[str, Any]:
     """Dispatch below the pipeline boundary without importing renderer bindings."""
-    from vbdmat.exporters import export_restored_optical
+    from vdbmat.exporters import export_restored_optical
 
     outcome = export_restored_optical(target.value, optical_zarr, destination)
     return outcome.to_dict()

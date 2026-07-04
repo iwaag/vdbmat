@@ -6,7 +6,7 @@ import numpy as np
 import numpy.typing as npt
 import pytest
 
-from vbdmat.core import (
+from vdbmat.core import (
     VOLUME_SCHEMA,
     GridGeometry,
     MaterialDefinition,
@@ -38,7 +38,7 @@ def palette() -> MaterialPalette:
 
 
 def provenance() -> Provenance:
-    return Provenance("vbdmat-test", "1.0.0")
+    return Provenance("vdbmat-test", "1.0.0")
 
 
 def valid_labels() -> npt.NDArray[np.uint16]:
@@ -404,7 +404,7 @@ def test_phase0_optical_volume_rejects_spectral_basis() -> None:
         (
             {
                 "schema": SchemaIdentity(
-                    "vbdmat.volume", SchemaVersion(major=1, minor=1, patch=0)
+                    "vdbmat.volume", SchemaVersion(major=1, minor=1, patch=0)
                 )
             },
             "schema",

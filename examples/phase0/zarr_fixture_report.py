@@ -5,9 +5,9 @@ from pathlib import Path
 
 import numpy as np
 
-from vbdmat.fixtures import all_synthetic_fixtures
-from vbdmat.io import read_optical_region, write_volume
-from vbdmat.optics import (
+from vdbmat.fixtures import all_synthetic_fixtures
+from vdbmat.io import read_optical_region, write_volume
+from vdbmat.optics import (
     map_material_volume_to_optical,
     phase0_provisional_mapping,
 )
@@ -19,7 +19,7 @@ def _directory_size(path: Path) -> int:
 
 def main() -> None:
     config = phase0_provisional_mapping()
-    with tempfile.TemporaryDirectory(prefix="vbdmat-zarr-report-") as directory:
+    with tempfile.TemporaryDirectory(prefix="vdbmat-zarr-report-") as directory:
         root = Path(directory)
         print("fixture,canonical_bytes,optical_bytes,region_zyx,partial_exact")
         for fixture in all_synthetic_fixtures():

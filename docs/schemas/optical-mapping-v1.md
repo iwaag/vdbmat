@@ -1,16 +1,16 @@
-# `vbdmat.optical-mapping` 1.0.0
+# `vdbmat.optical-mapping` 1.0.0
 
 An optical mapping supplied as data (ADR-009 D3): a UTF-8 JSON document carrying
 exactly the fields of `OpticalMappingConfig`, so a mapping's canonical JSON and
 SHA-256 digest are identical whether it is compiled in or loaded from a file.
-The reader (`vbdmat.optics.load_optical_mapping`) never repairs or defaults
+The reader (`vdbmat.optics.load_optical_mapping`) never repairs or defaults
 scientific values; violations are field-oriented failures.
 
 ## Document layout
 
 ```json
 {
-  "format": "vbdmat.optical-mapping",
+  "format": "vdbmat.optical-mapping",
   "format_version": "1.0.0",
   "configuration_id": "phase0-provisional-materials-v1",
   "version": "1.0.0",
@@ -49,7 +49,7 @@ scientific values; violations are field-oriented failures.
   identifiers belong to the voxel manifest palette layer, never to coefficient
   lookup.
 - The mapping's identity is `OpticalMappingConfig.digest` — the SHA-256 of its
-  canonical JSON, reported by `vbdmat mapping-digest FILE`. A pipeline
+  canonical JSON, reported by `vdbmat mapping-digest FILE`. A pipeline
   configuration referencing a mapping by `mapping.path` must declare this digest
   and the run fails if the file no longer hashes to it.
 

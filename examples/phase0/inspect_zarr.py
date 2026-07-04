@@ -3,7 +3,7 @@
 import argparse
 from pathlib import Path
 
-from vbdmat.io import inspect_volume
+from vdbmat.io import inspect_volume
 
 
 def main() -> None:

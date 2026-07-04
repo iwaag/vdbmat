@@ -7,8 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from vbdmat.optics import phase0_provisional_mapping
-from vbdmat.pipeline import (
+from vdbmat.optics import phase0_provisional_mapping
+from vdbmat.pipeline import (
     DEFAULT_MAPPING_NAME,
     PIPELINE_CONFIG_SCHEMA,
     ExportSettings,
@@ -154,7 +154,7 @@ def test_canonical_json_is_sorted_and_tight() -> None:
 
 
 def _mapping_file_config(tmp_path: Path) -> PipelineConfig:
-    from vbdmat.optics import write_optical_mapping
+    from vdbmat.optics import write_optical_mapping
 
     write_optical_mapping(tmp_path / "mapping.json", phase0_provisional_mapping())
     return direct_config(
@@ -171,7 +171,7 @@ def test_mapping_path_resolves_and_verifies_digest(tmp_path: Path) -> None:
 
 
 def test_mapping_path_with_wrong_digest_fails_at_resolution(tmp_path: Path) -> None:
-    from vbdmat.optics import write_optical_mapping
+    from vdbmat.optics import write_optical_mapping
 
     write_optical_mapping(tmp_path / "mapping.json", phase0_provisional_mapping())
     config = direct_config(

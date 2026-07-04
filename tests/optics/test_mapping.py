@@ -3,14 +3,14 @@
 import numpy as np
 import pytest
 
-from vbdmat.core import (
+from vdbmat.core import (
     MaterialLabelVolume,
     MaterialMixtureVolume,
     OpticalPropertyVolume,
     Provenance,
     VolumeValidationError,
 )
-from vbdmat.fixtures import (
+from vdbmat.fixtures import (
     SYNTHETIC_FIXTURE_FACTORIES,
     anisotropic_axis_marker,
     homogeneous_scattering_white,
@@ -18,7 +18,7 @@ from vbdmat.fixtures import (
     transparent_opaque_interface,
     two_material_mixture_ramp,
 )
-from vbdmat.optics import (
+from vdbmat.optics import (
     MAPPING_GENERATOR,
     MAPPING_GENERATOR_VERSION,
     MaterialOpticalProperties,
@@ -149,7 +149,7 @@ def test_output_provenance_preserves_config_and_source_identity() -> None:
     assert output.provenance.created_utc is None
     assert "fixture:homogeneous-transparent" in output.provenance.sources
     assert any(
-        item.startswith("source-generator:vbdmat.synthetic-fixtures@")
+        item.startswith("source-generator:vdbmat.synthetic-fixtures@")
         for item in output.provenance.sources
     )
     assert any(

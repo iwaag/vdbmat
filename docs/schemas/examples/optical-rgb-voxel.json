@@ -1,6 +1,6 @@
 {
   "schema": {
-    "name": "vbdmat.volume",
+    "name": "vdbmat.volume",
     "version": "1.0.0"
   },
   "asset_type": "optical-property",
@@ -49,7 +49,7 @@
     }
   },
   "provenance": {
-    "generator": "vbdmat-phase0-example",
+    "generator": "vdbmat-phase0-example",
     "generator_version": "1.0.0"
   },
   "worked_example": {

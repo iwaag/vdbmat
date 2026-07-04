@@ -5,12 +5,12 @@ from itertools import combinations
 import numpy as np
 import pytest
 
-from vbdmat.core import (
+from vdbmat.core import (
     MaterialLabelVolume,
     MaterialMixtureVolume,
     VolumeValidationError,
 )
-from vbdmat.fixtures import (
+from vdbmat.fixtures import (
     FIXTURE_GENERATOR,
     FIXTURE_GENERATOR_VERSION,
     SYNTHETIC_FIXTURE_FACTORIES,

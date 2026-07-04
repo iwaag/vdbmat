@@ -2,13 +2,13 @@
 
 - **Status:** Accepted
 - **Date:** 2026-07-04
-- **Decision owners:** VBDMAT maintainers
+- **Decision owners:** VDBMAT maintainers
 - **Phase:** 1-side1
 
 ## Context
 
 Phase 1 closed with a working research MVP whose core pipeline accepted two inputs:
-the `vbdmat.voxels` direct-voxel manifest (ADR-006) and a watertight STL that the
+the `vdbmat.voxels` direct-voxel manifest (ADR-006) and a watertight STL that the
 core itself voxelized. Before Phase 2 deepens print-process fidelity, the input
 boundary must be fixed so that geometry/material *generation* and material
 *coefficient data* can evolve independently of the core without weakening
@@ -16,7 +16,7 @@ reproducibility.
 
 Three coupling problems motivate this ADR:
 
-1. The core owns geometry-to-voxel conversion (`vbdmat.voxelize`), so every new
+1. The core owns geometry-to-voxel conversion (`vdbmat.voxelize`), so every new
    generation method (image stacking, generative growth models, richer mesh
    pipelines) would grow the core.
 2. The only optical mapping is the hardcoded `phase0-provisional-materials-v1`
@@ -33,11 +33,11 @@ this is a research-stage breaking change.
 
 ### D1 — The voxel manifest is the only core input
 
-The core pipeline accepts exactly one input contract: a `vbdmat.voxels`
+The core pipeline accepts exactly one input contract: a `vdbmat.voxels`
 material-label manifest plus its checksummed `.npy` payload (ADR-006). The
-`input.kind: "mesh"` path, `MeshVoxelizationSettings`, `vbdmat.voxelize`, the STL
-reader, and the `vbdmat voxelize` CLI command are removed from the core package.
-`vbdmat.pipeline-config` is bumped to **2.0.0**; version 1.x documents are rejected
+`input.kind: "mesh"` path, `MeshVoxelizationSettings`, `vdbmat.voxelize`, the STL
+reader, and the `vdbmat voxelize` CLI command are removed from the core package.
+`vdbmat.pipeline-config` is bumped to **2.0.0**; version 1.x documents are rejected
 by the major-version guard and no migration path is provided. The `InputKind` enum
 is retained with the single member `direct-voxel` as the explicit extension point.
 
@@ -50,7 +50,7 @@ design knowledge needed to rebuild it is recorded outside the package
 
 Any producer of core input — mesh voxelizer, layered image stacker, generative
 formation model, printer-slice converter — is an *input generator*. A generator is
-conforming iff it emits a valid `vbdmat.voxels` manifest, which requires it to:
+conforming iff it emits a valid `vdbmat.voxels` manifest, which requires it to:
 
 - declare shape, dtype (`uint16[z, y, x]`), voxel size with explicit units, and a
   rigid `local_to_world` transform;
@@ -62,14 +62,14 @@ conforming iff it emits a valid `vbdmat.voxels` manifest, which requires it to:
 
 The core never repairs, transposes, casts, or remaps generator output; violations
 are field-oriented failures (ADR-006 semantics, unchanged). The core package
-provides a writer helper (`vbdmat.io.voxel_manifest.write_material_label_manifest`)
+provides a writer helper (`vdbmat.io.voxel_manifest.write_material_label_manifest`)
 that generators may depend on; the dependency direction is generator → core, never
 the reverse.
 
 ### D3 — Optical mappings are supplied as data
 
 The material coefficient mapping becomes swappable without code changes. A new
-`vbdmat.optical-mapping` v1 JSON document carries exactly the fields of
+`vdbmat.optical-mapping` v1 JSON document carries exactly the fields of
 `OpticalMappingConfig` (`configuration_id`, `version`, `optical_basis`,
 `mixing_rule`, `calibration_status`, `materials[]` with `material_id`, `name`,
 `sigma_a_rgb_per_m`, `sigma_s_rgb_per_m`, `g`, `ior`). Its canonical JSON and

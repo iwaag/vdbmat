@@ -9,7 +9,7 @@ transparent resin and cannot be seen as a bare Cycles medium.
 Requires the OpenVDB Python bindings, so run it inside the pinned native container:
 
     docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -e PYTHONPATH=/work/src \
-        -v "$PWD:/work" -w /work vbdmat-openvdb-cycles \
+        -v "$PWD:/work" -w /work vdbmat-openvdb-cycles \
         python3 tools/phase0/inspect_vdb_grids.py \
         .local/phase1/step10/runs/stepped_wedge/exports/openvdb/openvdb-manifest.json
 

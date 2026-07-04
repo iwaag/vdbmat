@@ -1,4 +1,4 @@
-# VBDMAT developer notes
+# VDBMAT developer notes
 
 Working notes for developers and debugging. Product/architecture direction lives in
 `.local/roadmap.md`; renderer-facing demo plans live in the `.local/sidemission_*`
@@ -11,7 +11,7 @@ them.
 
 The historic `cycles.png` proofs (both Phase 0 and Phase 1) came out essentially black
 or a flat uniform colour. Careful reproduction inside the pinned
-`vbdmat-openvdb-cycles` container showed this is **not one code bug but a combination of
+`vdbmat-openvdb-cycles` container showed this is **not one code bug but a combination of
 three factors**, the first of which is fundamental:
 
 1. **Transparent test pieces × Cycles omitting internal IOR interfaces (the real
@@ -41,7 +41,7 @@ Volume shader.
 Lighting/clip fixes alone are not enough because there is no surface to light. The
 demonstrated fix is a **hybrid** setup:
 
-* **Surface** = the `exterior-*.ply` mesh that `vbdmat export mitsuba` *already writes*
+* **Surface** = the `exterior-*.ply` mesh that `vdbmat export mitsuba` *already writes*
   (metres, same coordinate frame as the VDB), shaded as a **Glass BSDF at IOR 1.48**.
   There is no need to reconstruct a surface from the VDB — reuse the Mitsuba export.
 * **Stage** = patterned backdrop + floor + environment light, so the transparent object
@@ -63,17 +63,17 @@ reveals "this piece is pure transparent resin"):
 
 ```bash
 docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -e PYTHONPATH=/work/src \
-  -v "$PWD:/work" -w /work vbdmat-openvdb-cycles \
+  -v "$PWD:/work" -w /work vdbmat-openvdb-cycles \
   python3 tools/phase0/inspect_vdb_grids.py \
   .local/phase1/step10/runs/stepped_wedge/exports/openvdb/openvdb-manifest.json
 ```
 
 **Render the lay-person glass demo** from a Mitsuba export directory (needs
-`exterior-*.ply`, produced by `vbdmat export mitsuba`):
+`exterior-*.ply`, produced by `vdbmat export mitsuba`):
 
 ```bash
 docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp \
-  -v "$PWD:/work" -w /work vbdmat-openvdb-cycles \
+  -v "$PWD:/work" -w /work vdbmat-openvdb-cycles \
   blender --background --python examples/phase1/demo/blender_glass_demo.py -- \
   .local/phase1/step11/runs/stepped_wedge/exports/mitsuba \
   .local/demo/stepped_wedge.png --samples 96 --size 400

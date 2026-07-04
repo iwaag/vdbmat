@@ -14,14 +14,14 @@ from typing import Any
 import numpy as np
 import numpy.typing as npt
 
-from vbdmat.boundaries import CapabilityStatus, derive_ior_interfaces
-from vbdmat.core.volumes import OpticalPropertyVolume
-from vbdmat.exporters.mitsuba import (
+from vdbmat.boundaries import CapabilityStatus, derive_ior_interfaces
+from vdbmat.core.volumes import OpticalPropertyVolume
+from vdbmat.exporters.mitsuba import (
     MitsubaFieldConversion,
     convert_optical_fields,
     mitsuba_capability_report,
 )
-from vbdmat.exporters.openvdb import (
+from vdbmat.exporters.openvdb import (
     OpenVDBFieldConversion,
     convert_openvdb_fields,
     openvdb_capability_report,

@@ -9,10 +9,10 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from vbdmat.exporters import ExportInputError, export_restored_optical
-from vbdmat.fixtures import anisotropic_axis_marker
-from vbdmat.io import write_volume
-from vbdmat.optics import map_material_volume_to_optical, phase0_provisional_mapping
+from vdbmat.exporters import ExportInputError, export_restored_optical
+from vdbmat.fixtures import anisotropic_axis_marker
+from vdbmat.io import write_volume
+from vdbmat.optics import map_material_volume_to_optical, phase0_provisional_mapping
 
 
 class _Transform:
@@ -58,7 +58,7 @@ def test_openvdb_export_restores_zarr_and_returns_complete_diagnostics(
     outcome = export_restored_optical("openvdb", source, output)
     document = outcome.to_dict()
 
-    assert document["adapter"] == "vbdmat.exporters.openvdb"
+    assert document["adapter"] == "vdbmat.exporters.openvdb"
     assert document["renderer"] == {
         "name": "openvdb",
         "version": "test-openvdb",

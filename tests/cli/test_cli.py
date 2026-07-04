@@ -10,9 +10,9 @@ from typing import Any
 
 import pytest
 
-from vbdmat.fixtures import write_phase1_fixtures
-from vbdmat.io import read_material_label_manifest, read_volume, write_volume
-from vbdmat.pipeline import zarr_store_sha256
+from vdbmat.fixtures import write_phase1_fixtures
+from vdbmat.io import read_material_label_manifest, read_volume, write_volume
+from vdbmat.pipeline import zarr_store_sha256
 
 
 @pytest.fixture
@@ -26,12 +26,12 @@ def _run(
     *arguments: object, cwd: Path | None = None
 ) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        ["vbdmat", *(str(item) for item in arguments)],
+        ["vdbmat", *(str(item) for item in arguments)],
         cwd=cwd,
         text=True,
         capture_output=True,
         check=False,
-        env={**os.environ, "VBDMAT_DEBUG": "0"},
+        env={**os.environ, "VDBMAT_DEBUG": "0"},
     )
 
 
@@ -95,7 +95,7 @@ def test_import_convert_inspect_and_validate(inputs: Path, tmp_path: Path) -> No
 def test_convert_with_external_mapping_file_matches_builtin(
     inputs: Path, tmp_path: Path
 ) -> None:
-    from vbdmat.optics import phase0_provisional_mapping, write_optical_mapping
+    from vdbmat.optics import phase0_provisional_mapping, write_optical_mapping
 
     mapping_file = tmp_path / "mapping.optical-mapping.json"
     write_optical_mapping(mapping_file, phase0_provisional_mapping())
@@ -172,7 +172,7 @@ def test_documented_exit_categories(inputs: Path, tmp_path: Path) -> None:
     usage = _run("import-voxels", inputs / "window_coupon.voxels.json")
     bad_manifest = tmp_path / "bad.voxels.json"
     bad_manifest.write_text(
-        json.dumps({"format": "not-vbdmat"}), encoding="utf-8"
+        json.dumps({"format": "not-vdbmat"}), encoding="utf-8"
     )
     validation = _run("import-voxels", bad_manifest, tmp_path / "bad-out.zarr")
     io_error = _run(
@@ -227,6 +227,6 @@ def test_help_documents_contract_and_console_entry_point() -> None:
     assert "provisional and uncalibrated" in top.stdout
     assert "physical print predictions" in top.stdout
     assert "voxelize" not in top.stdout  # removed from the core CLI (ADR-009)
-    assert "vbdmat.voxels manifest" in top.stdout
+    assert "vdbmat.voxels manifest" in top.stdout
     assert "provisional" in convert.stdout
     assert "uncalibrated" in convert.stdout

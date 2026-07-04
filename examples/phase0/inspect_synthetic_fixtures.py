@@ -1,6 +1,6 @@
 """Print deterministic summaries of every Phase 0 synthetic fixture."""
 
-from vbdmat.fixtures import all_synthetic_fixtures
+from vdbmat.fixtures import all_synthetic_fixtures
 
 
 def main() -> None:

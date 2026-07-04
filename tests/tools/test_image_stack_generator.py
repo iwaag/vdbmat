@@ -1,7 +1,7 @@
 """End-to-end demonstration of the ADR-009 input-generator contract.
 
 The image-stack tool lives outside the core package (``tools/``); these tests
-prove that a non-mesh external generator can produce a ``vbdmat.voxels`` manifest
+prove that a non-mesh external generator can produce a ``vdbmat.voxels`` manifest
 that the unmodified core pipeline accepts, including with a file-based optical
 mapping — the Phase 1-side1 exit criterion.
 """
@@ -17,9 +17,9 @@ from types import ModuleType
 import numpy as np
 import pytest
 
-from vbdmat.io import read_material_label_manifest
-from vbdmat.optics import phase0_provisional_mapping, write_optical_mapping
-from vbdmat.pipeline import PipelineConfig, run_pipeline
+from vdbmat.io import read_material_label_manifest
+from vdbmat.optics import phase0_provisional_mapping, write_optical_mapping
+from vdbmat.pipeline import PipelineConfig, run_pipeline
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _GENERATOR = _REPO_ROOT / "tools" / "image_stack_generator" / "generate.py"
@@ -89,7 +89,7 @@ def test_stack_produces_a_conforming_manifest(
     label = np.asarray(volume.material_id)
     assert int(np.count_nonzero(label == 2)) == 2 * 3  # the white core, middle z only
     assert int(np.count_nonzero(label == 1)) == 3 * 6 * 8 - 6
-    assert volume.provenance.generator == "vbdmat-image-stack"
+    assert volume.provenance.generator == "vdbmat-image-stack"
     assert any(
         source.startswith("identity:pgm-stack:sha256:")
         for source in volume.provenance.sources

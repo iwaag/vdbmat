@@ -1,5 +1,5 @@
 {
-  "format": "vbdmat.voxels",
+  "format": "vdbmat.voxels",
   "format_version": "1.0.0",
   "asset_type": "material-label",
   "payload": {
@@ -71,7 +71,7 @@
     }
   ],
   "source": {
-    "generator": "vbdmat.fixtures.phase1",
+    "generator": "vdbmat.fixtures.phase1",
     "generator_version": "1.0.0",
     "identity": "window-coupon",
     "notes": "Phase 1 multi-material window coupon; transparent matrix with an asymmetric white inclusion and black marker. Research fixture, not a printer-vendor format."

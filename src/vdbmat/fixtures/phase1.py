@@ -1,6 +1,6 @@
 """Deterministic Phase 1 representative input fixtures (plan Step 4, ADR-009).
 
-Two reviewable, analytically specified inputs exercise the ``vbdmat.voxels/1.0.0``
+Two reviewable, analytically specified inputs exercise the ``vdbmat.voxels/1.0.0``
 direct-voxel contract end to end without opaque binaries:
 
 * a **multi-material window coupon** (a transparent matrix with one white inclusion
@@ -26,13 +26,13 @@ from typing import Any
 import numpy as np
 import numpy.typing as npt
 
-from vbdmat.core import (
+from vdbmat.core import (
     MaterialDefinition,
     MaterialPalette,
     MaterialRole,
 )
 
-PHASE1_FIXTURE_GENERATOR = "vbdmat.fixtures.phase1"
+PHASE1_FIXTURE_GENERATOR = "vdbmat.fixtures.phase1"
 PHASE1_FIXTURE_GENERATOR_VERSION = "1.0.0"
 
 # --------------------------------------------------------------------------- #
@@ -118,10 +118,10 @@ def window_coupon_payload_bytes() -> bytes:
 
 
 def window_coupon_manifest(payload_sha256: str) -> dict[str, Any]:
-    """Return the ``vbdmat.voxels/1.0.0`` manifest document for the coupon."""
+    """Return the ``vdbmat.voxels/1.0.0`` manifest document for the coupon."""
     tx, ty, tz = _COUPON_TRANSLATION_M
     return {
-        "format": "vbdmat.voxels",
+        "format": "vdbmat.voxels",
         "format_version": "1.0.0",
         "asset_type": "material-label",
         "payload": {
@@ -256,11 +256,11 @@ def stepped_wedge_payload_bytes() -> bytes:
 
 
 def stepped_wedge_manifest(payload_sha256: str) -> dict[str, Any]:
-    """Return the ``vbdmat.voxels/1.0.0`` manifest document for the wedge."""
+    """Return the ``vdbmat.voxels/1.0.0`` manifest document for the wedge."""
     label_shape = stepped_wedge_label().shape
     pad_m = _WEDGE_PADDING_CELLS * _WEDGE_VOXEL_SIZE_XYZ_M[0]
     return {
-        "format": "vbdmat.voxels",
+        "format": "vdbmat.voxels",
         "format_version": "1.0.0",
         "asset_type": "material-label",
         "payload": {

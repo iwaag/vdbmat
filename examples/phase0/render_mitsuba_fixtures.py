@@ -4,9 +4,9 @@ import argparse
 import json
 from pathlib import Path
 
-from vbdmat.exporters.mitsuba import MitsubaExportConfig, render_mitsuba
-from vbdmat.fixtures import all_synthetic_fixtures
-from vbdmat.optics import (
+from vdbmat.exporters.mitsuba import MitsubaExportConfig, render_mitsuba
+from vdbmat.fixtures import all_synthetic_fixtures
+from vdbmat.optics import (
     map_material_volume_to_optical,
     phase0_provisional_mapping,
 )

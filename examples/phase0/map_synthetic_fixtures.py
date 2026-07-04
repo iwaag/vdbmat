@@ -2,8 +2,8 @@
 
 import numpy as np
 
-from vbdmat.fixtures import all_synthetic_fixtures
-from vbdmat.optics import (
+from vdbmat.fixtures import all_synthetic_fixtures
+from vdbmat.optics import (
     map_material_volume_to_optical,
     phase0_provisional_mapping,
 )

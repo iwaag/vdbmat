@@ -1,6 +1,6 @@
 {
   "schema": {
-    "name": "vbdmat.pipeline-config",
+    "name": "vdbmat.pipeline-config",
     "version": "2.0.0"
   },
   "input": {

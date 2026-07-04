@@ -17,21 +17,21 @@ from typing import Any, TypeAlias, cast
 import numpy as np
 import numpy.typing as npt
 
-from vbdmat.boundaries import (
+from vdbmat.boundaries import (
     BoundaryAxis,
     BoundaryDerivationConfig,
     CapabilityStatus,
     DerivedInterfaceSet,
     derive_ior_interfaces,
 )
-from vbdmat.core.axes import PointXYZ
-from vbdmat.core.geometry import GridGeometry
-from vbdmat.core.transforms import Matrix4
-from vbdmat.core.volumes import OpticalPropertyVolume
+from vdbmat.core.axes import PointXYZ
+from vdbmat.core.geometry import GridGeometry
+from vdbmat.core.transforms import Matrix4
+from vdbmat.core.volumes import OpticalPropertyVolume
 
 from .diagnostics import CapabilityEntry, CapabilityReport
 
-MITSUBA_ADAPTER = "vbdmat.exporters.mitsuba"
+MITSUBA_ADAPTER = "vdbmat.exporters.mitsuba"
 MITSUBA_ADAPTER_VERSION = "1.0.0"
 
 FloatArray: TypeAlias = npt.NDArray[np.float32]
@@ -281,7 +281,7 @@ def prepare_mitsuba_scene(
         "type": "scene",
         "integrator": {"type": "volpath", "max_depth": config.max_depth},
         "sensor": _sensor_dict(mi, volume.geometry, config),
-        "vbdmat_medium": {
+        "vdbmat_medium": {
             "type": "heterogeneous",
             "sigma_t": {
                 "type": "gridvolume",
@@ -320,7 +320,7 @@ def prepare_mitsuba_scene(
                 "ext_ior": config.ambient_ior,
             }
         )
-        shape["interior"] = {"type": "ref", "id": "vbdmat_medium"}
+        shape["interior"] = {"type": "ref", "id": "vdbmat_medium"}
         scene[f"exterior_{shape_index:03d}"] = shape
         shape_index += 1
 
@@ -335,8 +335,8 @@ def prepare_mitsuba_scene(
             "int_ior": negative_ior,
             "ext_ior": positive_ior,
         }
-        shape["interior"] = {"type": "ref", "id": "vbdmat_medium"}
-        shape["exterior"] = {"type": "ref", "id": "vbdmat_medium"}
+        shape["interior"] = {"type": "ref", "id": "vdbmat_medium"}
+        shape["exterior"] = {"type": "ref", "id": "vdbmat_medium"}
         scene[f"interior_{shape_index:03d}"] = shape
         shape_index += 1
 

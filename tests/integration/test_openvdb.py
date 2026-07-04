@@ -3,9 +3,9 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from vbdmat.exporters.openvdb import export_openvdb
-from vbdmat.fixtures import anisotropic_axis_marker
-from vbdmat.optics import map_material_volume_to_optical, phase0_provisional_mapping
+from vdbmat.exporters.openvdb import export_openvdb
+from vdbmat.fixtures import anisotropic_axis_marker
+from vdbmat.optics import map_material_volume_to_optical, phase0_provisional_mapping
 
 try:
     import openvdb as vdb

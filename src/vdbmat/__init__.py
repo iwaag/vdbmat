@@ -3,7 +3,7 @@
 from importlib.metadata import PackageNotFoundError, version
 
 try:
-    __version__ = version("vbdmat")
+    __version__ = version("vdbmat")
 except PackageNotFoundError:
     # Examples also run directly from a mounted source tree in optional native
     # renderer containers, where distribution metadata is intentionally absent.

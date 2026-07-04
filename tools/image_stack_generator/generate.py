@@ -1,8 +1,8 @@
-"""External input generator: layered 2D image stack → ``vbdmat.voxels`` manifest.
+"""External input generator: layered 2D image stack → ``vdbmat.voxels`` manifest.
 
 This is the reference demonstration of the ADR-009 D2 input-generator contract: a
 tool *outside* the core pipeline that turns non-voxel source data into the
-manifest the core accepts. It deliberately depends on ``vbdmat`` only for the
+manifest the core accepts. It deliberately depends on ``vdbmat`` only for the
 canonical types and the shared manifest writer (generator → core, never the
 reverse).
 
@@ -39,7 +39,7 @@ from pathlib import Path
 import numpy as np
 import numpy.typing as npt
 
-from vbdmat.core import (
+from vdbmat.core import (
     GridGeometry,
     MaterialDefinition,
     MaterialLabelVolume,
@@ -47,9 +47,9 @@ from vbdmat.core import (
     MaterialRole,
     Provenance,
 )
-from vbdmat.io import write_material_label_manifest
+from vdbmat.io import write_material_label_manifest
 
-GENERATOR = "vbdmat-image-stack"
+GENERATOR = "vdbmat-image-stack"
 GENERATOR_VERSION = "0.1.0"
 
 
@@ -236,7 +236,7 @@ def stack_to_volume(
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Stack grayscale PGM slices into a vbdmat.voxels manifest."
+        description="Stack grayscale PGM slices into a vdbmat.voxels manifest."
     )
     parser.add_argument("slices_dir", type=Path, metavar="SLICES_DIR")
     parser.add_argument("config", type=Path, metavar="CONFIG")

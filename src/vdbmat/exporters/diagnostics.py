@@ -6,7 +6,7 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
-from vbdmat.boundaries import CapabilityStatus
+from vdbmat.boundaries import CapabilityStatus
 
 
 @dataclass(frozen=True, slots=True)

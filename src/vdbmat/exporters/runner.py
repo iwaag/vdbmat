@@ -8,8 +8,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from vbdmat.core import OpticalPropertyVolume
-from vbdmat.io import read_volume
+from vdbmat.core import OpticalPropertyVolume
+from vdbmat.io import read_volume
 
 from .diagnostics import CapabilityReport
 from .mitsuba import (

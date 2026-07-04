@@ -6,7 +6,7 @@ export stages to run, and where to publish the run bundle. It is a pure data obj
 building it performs no I/O and creates no output — so an invalid combination fails
 before anything is written (plan Step 5).
 
-Per ADR-009 D1, the only supported input is the ``vbdmat.voxels`` direct-voxel
+Per ADR-009 D1, the only supported input is the ``vdbmat.voxels`` direct-voxel
 manifest; the core owns no geometry-to-voxel conversion.
 
 Two canonicalizations are exposed:
@@ -28,8 +28,8 @@ from numbers import Integral
 from pathlib import Path
 from typing import Any
 
-from vbdmat.core import SchemaIdentity, SchemaVersion
-from vbdmat.optics import (
+from vdbmat.core import SchemaIdentity, SchemaVersion
+from vdbmat.optics import (
     OpticalMappingConfig,
     OpticalMappingError,
     load_optical_mapping,
@@ -39,7 +39,7 @@ from vbdmat.optics import (
 from .errors import PipelineConfigError
 
 PIPELINE_CONFIG_SCHEMA = SchemaIdentity(
-    name="vbdmat.pipeline-config", version=SchemaVersion(2, 0, 0)
+    name="vdbmat.pipeline-config", version=SchemaVersion(2, 0, 0)
 )
 
 #: Builtin optical mappings referenced by name from a configuration.

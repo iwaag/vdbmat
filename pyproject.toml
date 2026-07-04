@@ -3,7 +3,7 @@ requires = ["uv_build>=0.10.3,<0.11.0"]
 build-backend = "uv_build"
 
 [project]
-name = "vbdmat"
+name = "vdbmat"
 version = "0.1.0"
 description = "Renderer-independent preprocessing for voxel material optics"
 readme = "README.md"
@@ -15,7 +15,7 @@ dependencies = [
 ]
 
 [project.scripts]
-vbdmat = "vbdmat.cli.main:main"
+vdbmat = "vdbmat.cli.main:main"
 
 [dependency-groups]
 dev = [

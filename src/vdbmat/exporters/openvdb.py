@@ -14,13 +14,13 @@ from typing import TypeAlias, cast
 import numpy as np
 import numpy.typing as npt
 
-from vbdmat.boundaries import CapabilityStatus
-from vbdmat.core.transforms import Matrix4
-from vbdmat.core.volumes import OpticalPropertyVolume
+from vdbmat.boundaries import CapabilityStatus
+from vdbmat.core.transforms import Matrix4
+from vdbmat.core.volumes import OpticalPropertyVolume
 
 from .diagnostics import CapabilityEntry, CapabilityReport
 
-OPENVDB_ADAPTER = "vbdmat.exporters.openvdb"
+OPENVDB_ADAPTER = "vdbmat.exporters.openvdb"
 OPENVDB_ADAPTER_VERSION = "1.0.0"
 
 FloatArray: TypeAlias = npt.NDArray[np.float32]
@@ -244,17 +244,17 @@ def export_openvdb(
         grid.gridClass = "fog volume"
         grid.transform = transform.copy() if hasattr(transform, "copy") else transform
         grid.copyFromArray(np.asarray(array), tolerance=0.0)
-        grid["vbdmat:unit"] = (
+        grid["vdbmat:unit"] = (
             "m^-1" if "sigma" in grid_name or grid_name.startswith("cycles_") else "1"
         )
-        grid["vbdmat:dimensions"] = "x,y,z"
+        grid["vdbmat:dimensions"] = "x,y,z"
         grids.append(grid)
 
     vdb_path = output / f"{name}.vdb"
     metadata = {
         "creator": f"{OPENVDB_ADAPTER} {OPENVDB_ADAPTER_VERSION}",
-        "vbdmat:schema": f"{volume.schema.name} {volume.schema.version}",
-        "vbdmat:world_unit": "m",
+        "vdbmat:schema": f"{volume.schema.name} {volume.schema.version}",
+        "vdbmat:world_unit": "m",
     }
     try:
         vdb.write(str(vdb_path), grids=grids, metadata=metadata)

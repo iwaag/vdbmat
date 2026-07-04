@@ -12,31 +12,31 @@ from typing import Any
 import numpy as np
 import pytest
 
-from vbdmat.core import MaterialMixtureVolume, OpticalPropertyVolume
-from vbdmat.fixtures import (
+from vdbmat.core import MaterialMixtureVolume, OpticalPropertyVolume
+from vdbmat.fixtures import (
     homogeneous_transparent,
     transparent_opaque_interface,
     two_material_mixture_ramp,
     write_phase1_fixtures,
 )
-from vbdmat.io import (
+from vdbmat.io import (
     read_material_label_manifest,
     read_optical_region,
     read_volume,
     write_volume,
 )
-from vbdmat.optics import map_material_volume_to_optical, phase0_provisional_mapping
-from vbdmat.pipeline import PipelineConfig, run_pipeline, zarr_store_sha256
+from vdbmat.optics import map_material_volume_to_optical, phase0_provisional_mapping
+from vdbmat.pipeline import PipelineConfig, run_pipeline, zarr_store_sha256
 
 
 def _run_cli(*arguments: object, cwd: Path) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        ["vbdmat", *(str(item) for item in arguments)],
+        ["vdbmat", *(str(item) for item in arguments)],
         cwd=cwd,
         text=True,
         capture_output=True,
         check=False,
-        env={**os.environ, "VBDMAT_DEBUG": "0"},
+        env={**os.environ, "VDBMAT_DEBUG": "0"},
     )
 
 

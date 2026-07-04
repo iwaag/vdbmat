@@ -4,13 +4,13 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from vbdmat.exporters.mitsuba import (
+from vdbmat.exporters.mitsuba import (
     MitsubaExportConfig,
     prepare_mitsuba_scene,
     render_mitsuba,
 )
-from vbdmat.fixtures import all_synthetic_fixtures, homogeneous_transparent
-from vbdmat.optics import (
+from vdbmat.fixtures import all_synthetic_fixtures, homogeneous_transparent
+from vdbmat.optics import (
     map_material_volume_to_optical,
     phase0_provisional_mapping,
 )
@@ -49,7 +49,7 @@ def test_prepared_scene_has_nearest_raw_grids_and_loads(tmp_path: Path) -> None:
     prepared = prepare_mitsuba_scene(
         _mapped(homogeneous_transparent()), tmp_path, config
     )
-    medium = prepared.scene_dict["vbdmat_medium"]
+    medium = prepared.scene_dict["vdbmat_medium"]
     assert medium["sigma_t"]["filter_type"] == "nearest"
     assert medium["sigma_t"]["raw"] is True
     assert medium["albedo"]["filter_type"] == "nearest"

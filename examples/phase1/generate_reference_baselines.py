@@ -21,22 +21,22 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from vbdmat.conformance import (
+from vdbmat.conformance import (
     check_fixture_conformance,
     check_png_sanity,
     png_pixel_sha256,
 )
-from vbdmat.core import OpticalPropertyVolume
-from vbdmat.exporters.mitsuba import (
+from vdbmat.core import OpticalPropertyVolume
+from vdbmat.exporters.mitsuba import (
     MITSUBA_ADAPTER,
     MITSUBA_ADAPTER_VERSION,
     MitsubaExportConfig,
     render_mitsuba,
 )
-from vbdmat.exporters.openvdb import OPENVDB_ADAPTER, OPENVDB_ADAPTER_VERSION
-from vbdmat.fixtures import write_phase1_fixtures
-from vbdmat.io import read_volume
-from vbdmat.pipeline import (
+from vdbmat.exporters.openvdb import OPENVDB_ADAPTER, OPENVDB_ADAPTER_VERSION
+from vdbmat.fixtures import write_phase1_fixtures
+from vdbmat.io import read_volume
+from vdbmat.pipeline import (
     InputKind,
     PipelineConfig,
     run_pipeline,
@@ -184,7 +184,7 @@ def generate(output: Path, *, overwrite: bool) -> dict[str, Any]:
         }
 
     manifest: dict[str, Any] = {
-        "schema": {"name": "vbdmat.phase1-baselines", "version": "1.0.0"},
+        "schema": {"name": "vdbmat.phase1-baselines", "version": "1.0.0"},
         "created_utc": BASELINE_CREATED_UTC.isoformat(),
         "renderer": {
             "name": "mitsuba",

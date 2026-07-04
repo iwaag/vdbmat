@@ -16,9 +16,9 @@ from typing import Any
 import numpy as np
 import pytest
 
-from vbdmat.fixtures import write_phase1_fixtures
-from vbdmat.io.zarr import read_volume
-from vbdmat.pipeline import (
+from vdbmat.fixtures import write_phase1_fixtures
+from vdbmat.io.zarr import read_volume
+from vdbmat.pipeline import (
     ExportSettings,
     ExportTarget,
     PipelineConfig,
@@ -26,7 +26,7 @@ from vbdmat.pipeline import (
     StageStatus,
     run_pipeline,
 )
-from vbdmat.pipeline.runner import _run_id
+from vdbmat.pipeline.runner import _run_id
 
 CANONICAL_STAGES = (
     "validate-material",
@@ -170,7 +170,7 @@ def test_wedge_provenance_records_generator_identity(inputs_dir: Path) -> None:
     result = run_pipeline(config, base_dir=str(inputs_dir))
     bundle = result.output_path
     material = read_volume(bundle / "material.zarr")
-    assert material.provenance.generator == "vbdmat.fixtures.phase1"
+    assert material.provenance.generator == "vdbmat.fixtures.phase1"
     assert any(
         source.startswith("identity:") for source in material.provenance.sources
     )
@@ -268,7 +268,7 @@ def test_default_export_backend_reports_missing_optional_dependency(
     def missing_export(target: ExportTarget, optical: Path, dest: Path) -> Any:
         raise RuntimeError("Mitsuba bindings are unavailable")
 
-    monkeypatch.setattr("vbdmat.pipeline.runner._default_export_runner", missing_export)
+    monkeypatch.setattr("vdbmat.pipeline.runner._default_export_runner", missing_export)
     config = _coupon_config(
         inputs_dir,
         "out/coupon",

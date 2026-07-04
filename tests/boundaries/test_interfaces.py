@@ -3,7 +3,7 @@ from dataclasses import replace
 import numpy as np
 import pytest
 
-from vbdmat.boundaries import (
+from vdbmat.boundaries import (
     BoundaryAxis,
     BoundaryDerivationConfig,
     CapabilityStatus,
@@ -11,9 +11,9 @@ from vbdmat.boundaries import (
     derive_ior_interfaces,
     ior_policy,
 )
-from vbdmat.core import GridGeometry
-from vbdmat.fixtures import all_synthetic_fixtures, transparent_opaque_interface
-from vbdmat.optics import (
+from vdbmat.core import GridGeometry
+from vdbmat.fixtures import all_synthetic_fixtures, transparent_opaque_interface
+from vdbmat.optics import (
     map_material_volume_to_optical,
     phase0_provisional_mapping,
 )

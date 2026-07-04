@@ -2,7 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-07-01
-- **Decision owners:** VBDMAT maintainers
+- **Decision owners:** VDBMAT maintainers
 - **Phase:** 1, Step 1
 
 ## Context
@@ -22,22 +22,22 @@ public compatibility promise (Phase 7).
 
 ### D1. Entry point and command set
 
-A console entry point `vbdmat` (declared in `pyproject.toml`, backed by
-`vbdmat.cli.main`) provides:
+A console entry point `vdbmat` (declared in `pyproject.toml`, backed by
+`vdbmat.cli.main`) provides:
 
 ```text
-vbdmat import-voxels MANIFEST OUTPUT
-vbdmat voxelize MESH OUTPUT --unit U --voxel-size SX[,SY,SZ] --material-id ID [--placement FILE]
-vbdmat convert MATERIAL_ZARR OUTPUT [--mapping NAME|FILE]
-vbdmat inspect ASSET [--json]
-vbdmat validate ASSET [--json]
-vbdmat run CONFIG
-vbdmat export {mitsuba|openvdb} OPTICAL_ZARR OUTPUT
+vdbmat import-voxels MANIFEST OUTPUT
+vdbmat voxelize MESH OUTPUT --unit U --voxel-size SX[,SY,SZ] --material-id ID [--placement FILE]
+vdbmat convert MATERIAL_ZARR OUTPUT [--mapping NAME|FILE]
+vdbmat inspect ASSET [--json]
+vdbmat validate ASSET [--json]
+vdbmat run CONFIG
+vdbmat export {mitsuba|openvdb} OPTICAL_ZARR OUTPUT
 ```
 
 Exact names/flags may be refined during implementation, but none of these capabilities
-may disappear. Every command calls package APIs (`vbdmat.io`, `vbdmat.voxelize`,
-`vbdmat.optics`, `vbdmat.pipeline`, `vbdmat.exporters`); the CLI contains no conversion
+may disappear. Every command calls package APIs (`vdbmat.io`, `vdbmat.voxelize`,
+`vdbmat.optics`, `vdbmat.pipeline`, `vdbmat.exporters`); the CLI contains no conversion
 or scientific logic of its own.
 
 - `import-voxels` — ADR-006 direct-voxel manifest → `material.zarr`.
@@ -56,7 +56,7 @@ or scientific logic of its own.
   no human log text; without `--json`, a concise human summary. Never mix them.
 - **stderr** carries all human-oriented diagnostics, progress, warnings, and error
   messages.
-- This lets `vbdmat inspect asset --json > out.json` be parsed without contamination.
+- This lets `vdbmat inspect asset --json > out.json` be parsed without contamination.
 
 ### D3. Exit codes
 
@@ -71,7 +71,7 @@ or scientific logic of its own.
 
 Exit code `1` is reserved for unexpected internal errors (bug); those may print a
 traceback. Categories `2–6` are *expected* outcomes: they print a clear, field-oriented
-message to stderr and **no traceback**, unless `--debug` (or `VBDMAT_DEBUG=1`) is set,
+message to stderr and **no traceback**, unless `--debug` (or `VDBMAT_DEBUG=1`) is set,
 which re-raises the full traceback for developers.
 
 ### D4. Overwrite policy
@@ -119,51 +119,51 @@ argument parsing, output formatting, and exit-code mapping only.
 Direct-voxel path (core environment, no renderer):
 
 ```text
-vbdmat import-voxels window-coupon.voxels.json out/material.zarr
-vbdmat convert out/material.zarr out/optical.zarr
-vbdmat inspect out/optical.zarr --json
-vbdmat validate out/optical.zarr --json
+vdbmat import-voxels window-coupon.voxels.json out/material.zarr
+vdbmat convert out/material.zarr out/optical.zarr
+vdbmat inspect out/optical.zarr --json
+vdbmat validate out/optical.zarr --json
 ```
 
 Mesh path (explicit units required):
 
 ```text
-vbdmat voxelize stepped-wedge.stl out/wedge.material.zarr \
+vdbmat voxelize stepped-wedge.stl out/wedge.material.zarr \
     --unit mm --voxel-size 0.001 --material-id 1
 ```
 
 Full pipeline from a config file (produces an ADR-007 bundle):
 
 ```text
-vbdmat run window-coupon.run.json      # -> run/ bundle
-vbdmat inspect run/ --json             # summarizes run.json + assets
+vdbmat run window-coupon.run.json      # -> run/ bundle
+vdbmat inspect run/ --json             # summarizes run.json + assets
 ```
 
 Optional export (may exit 6 if the dependency is absent):
 
 ```text
-vbdmat export mitsuba run/optical.zarr run/exports/mitsuba
+vdbmat export mitsuba run/optical.zarr run/exports/mitsuba
 ```
 
 Expected failure behaviours (no traceback, documented code):
 
 ```text
-vbdmat voxelize m.stl out.zarr --voxel-size 0.001 --material-id 1
+vdbmat voxelize m.stl out.zarr --voxel-size 0.001 --material-id 1
   # exit 2: missing required --unit
 
-vbdmat import-voxels tampered.voxels.json out.zarr
+vdbmat import-voxels tampered.voxels.json out.zarr
   # exit 4: payload SHA-256 mismatch: <path>
 
-vbdmat import-voxels out-of-tree.voxels.json out.zarr
+vdbmat import-voxels out-of-tree.voxels.json out.zarr
   # exit 4: payload path escapes manifest directory: <path>
 
-vbdmat import-voxels wrong-dtype.voxels.json out.zarr
+vdbmat import-voxels wrong-dtype.voxels.json out.zarr
   # exit 3: arrays.material_id must be uint16, got int32
 
-vbdmat convert out/material.zarr out/optical.zarr   # (out/optical.zarr exists)
+vdbmat convert out/material.zarr out/optical.zarr   # (out/optical.zarr exists)
   # exit 2: refusing to overwrite existing path: out/optical.zarr (use --overwrite)
 
-vbdmat export mitsuba run/optical.zarr run/exports/mitsuba   # (mitsuba absent)
+vdbmat export mitsuba run/optical.zarr run/exports/mitsuba   # (mitsuba absent)
   # exit 6: mitsuba is not installed; install the 'mitsuba' dependency group
 ```
 
@@ -175,7 +175,7 @@ human-readable error text is on stderr.
 - **Single `1`/`0` exit scheme.** Rejected: subprocess tests and scripts must
   distinguish usage vs validation vs I/O vs conversion vs optional-dependency failures.
 - **Tracebacks for user errors.** Rejected: they are noise for expected input mistakes;
-  `--debug`/`VBDMAT_DEBUG` preserves them for developers.
+  `--debug`/`VDBMAT_DEBUG` preserves them for developers.
 - **Mixing JSON and logs on stdout.** Rejected: it breaks machine parsing; diagnostics
   go to stderr.
 - **Silent overwrite / inferred units / auto-transpose.** Rejected: each is a named stop

@@ -1,4 +1,4 @@
-"""Tests for the ``vbdmat.optical-mapping`` external document (ADR-009 D3/D4)."""
+"""Tests for the ``vdbmat.optical-mapping`` external document (ADR-009 D3/D4)."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from typing import Any
 
 import pytest
 
-from vbdmat.optics import (
+from vdbmat.optics import (
     OpticalMappingError,
     load_optical_mapping,
     optical_mapping_from_json_dict,
