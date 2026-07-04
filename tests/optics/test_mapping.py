@@ -21,6 +21,7 @@ from vbdmat.fixtures import (
 from vbdmat.optics import (
     MAPPING_GENERATOR,
     MAPPING_GENERATOR_VERSION,
+    MaterialOpticalProperties,
     OpticalMappingConfig,
     OpticalMappingError,
     map_material_volume_to_optical,
@@ -194,6 +195,36 @@ def test_missing_declared_palette_mapping_fails_before_conversion() -> None:
 
     assert captured.value.field_path == "palette.material_ids"
     assert "(3,)" in captured.value.message
+
+
+def test_palette_and_mapping_name_disagreement_fails(tmp_path: object) -> None:
+    # ADR-009 D4: a shared material_id whose names disagree is an error, never a
+    # silent wrong-coefficient application.
+    fixture = homogeneous_transparent()
+    full = phase0_provisional_mapping()
+    renamed = OpticalMappingConfig(
+        configuration_id="renamed-id-1",
+        version=full.version,
+        materials=tuple(
+            item
+            if item.material_id != 1
+            else MaterialOpticalProperties(
+                1,
+                "some-other-resin",
+                sigma_a_rgb_per_m=item.sigma_a_rgb_per_m,
+                sigma_s_rgb_per_m=item.sigma_s_rgb_per_m,
+                g=item.g,
+                ior=item.ior,
+            )
+            for item in full.materials
+        ),
+    )
+
+    with pytest.raises(OpticalMappingError) as captured:
+        map_material_volume_to_optical(fixture.volume, renamed)
+
+    assert captured.value.field_path == "palette.materials"
+    assert "some-other-resin" in captured.value.message
 
 
 def test_invalid_mixture_fractions_fail_at_volume_boundary_before_mapping() -> None:

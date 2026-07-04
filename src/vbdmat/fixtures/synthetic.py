@@ -243,9 +243,9 @@ def _axis_palette() -> MaterialPalette:
     return MaterialPalette(
         (
             MaterialDefinition(0, "air", MaterialRole.BACKGROUND),
-            MaterialDefinition(10, "axis-x", MaterialRole.MATERIAL),
-            MaterialDefinition(20, "axis-y", MaterialRole.MATERIAL),
-            MaterialDefinition(30, "axis-z", MaterialRole.MATERIAL),
+            MaterialDefinition(10, "axis-x-diagnostic", MaterialRole.MATERIAL),
+            MaterialDefinition(20, "axis-y-diagnostic", MaterialRole.MATERIAL),
+            MaterialDefinition(30, "axis-z-diagnostic", MaterialRole.MATERIAL),
         )
     )
 

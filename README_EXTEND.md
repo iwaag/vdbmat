@@ -107,20 +107,34 @@ through the full pipeline, write a run config (`{"input": {"kind": "direct-voxel
   transform must stay rigid).
 - Writing `dimensions` in a different order, e.g. `["x","y","z"]` (always fixed to
   `["z","y","x"]`).
-- Inventing a material name that isn't in the built-in table (optical coefficients
-  won't resolve and the run will fail).
+- A palette `name` that disagrees with the optical mapping's name for the same
+  `material_id` (the run fails: see `docs/material-identity-contract.md`).
 
-## 7. Direction of travel (context)
+## 7. Status (ADR-009)
 
-Roadmap `Phase 1-side1` (see `.local/roadmap.md`) plans to remove STL mesh
-voxelization (`input.kind: "mesh"`) from the core and make the optical coefficient
-mapping externally pluggable. If that lands, the contract in this document becomes
-the *sole* input interface. Tools built against this contract today should be largely
-insulated from that future core change.
+Phase 1-side1 has landed: this contract is now the **sole** core input interface.
+STL mesh voxelization was removed from the core (`input.kind: "mesh"` no longer
+exists), and the optical coefficient mapping is pluggable — supply a
+`vbdmat.optical-mapping` JSON document via the run config's `mapping.path` +
+`mapping.digest` or the CLI's `convert --mapping-file` (see
+`docs/schemas/optical-mapping-v1.md`; get the digest with
+`vbdmat mapping-digest FILE`).
+
+Two conveniences for generator authors:
+
+- `vbdmat.io.write_material_label_manifest(directory, name, volume)` emits a
+  conforming manifest + payload from a canonical volume, so you don't hand-roll
+  the JSON.
+- `tools/image_stack_generator/generate.py` is a complete reference generator
+  (grayscale PGM slice stack → manifest).
 
 ## 8. Further reading (if you need more detail)
 
-- `docs/adr/0006-phase1-inputs-and-voxelization.md` — the formal ADR for this contract
+- `docs/adr/0009-input-generator-contract-and-external-mappings.md` — the input
+  generator contract and mapping externalization decisions
+- `docs/adr/0006-phase1-inputs-and-voxelization.md` — the formal ADR for the manifest
+- `docs/material-identity-contract.md` — material naming rules and the two identity layers
+- `docs/schemas/optical-mapping-v1.md` — the external optical-mapping document format
 - `src/vbdmat/io/voxel_manifest.py` — validation implementation (source of truth for behavior)
 - `src/vbdmat/core/materials.py` — `MaterialRole`/`MaterialPalette` definitions
 - `src/vbdmat/optics/config.py` — built-in material names and their optical coefficients

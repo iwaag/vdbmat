@@ -21,9 +21,11 @@ from vbdmat.fixtures import (
     window_coupon_payload_bytes,
     write_phase1_fixtures,
 )
+from vbdmat.optics import phase0_provisional_mapping, write_optical_mapping
 
 INPUTS = Path(__file__).parent / "inputs"
 INVALID = INPUTS / "invalid"
+MAPPINGS = Path(__file__).parent / "mappings"
 
 
 def _write_invalid_samples() -> None:
@@ -44,9 +46,16 @@ def _write_invalid_samples() -> None:
 def main() -> None:
     written = write_phase1_fixtures(INPUTS)
     _write_invalid_samples()
+    # The builtin mapping as an external document (ADR-009 D3): its digest must
+    # equal the builtin's, which tests/optics/test_mapping_document.py asserts.
+    mapping = phase0_provisional_mapping()
+    mapping_path = write_optical_mapping(
+        MAPPINGS / "phase0-provisional-materials-v1.optical-mapping.json", mapping
+    )
     for name, path in written.items():
         print(f"{name}: {path.relative_to(INPUTS.parent)}")
     print("invalid samples written under", INVALID.relative_to(INPUTS.parent))
+    print(f"mapping: {mapping_path.relative_to(INPUTS.parent)} ({mapping.digest})")
 
 
 if __name__ == "__main__":

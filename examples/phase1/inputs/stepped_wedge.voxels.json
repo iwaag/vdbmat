@@ -51,7 +51,7 @@
   "materials": [
     {
       "material_id": 0,
-      "name": "background",
+      "name": "air",
       "role": "background"
     },
     {

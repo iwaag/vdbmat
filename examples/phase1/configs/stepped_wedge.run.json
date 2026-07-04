@@ -8,8 +8,8 @@
     "path": "../inputs/stepped_wedge.voxels.json"
   },
   "mapping": {
-    "name": "phase0-provisional-materials-v1",
-    "digest": "sha256:da83581c56ca175bf5888de2650cc84020602f56d8de9111d0bbefb5033252eb"
+    "digest": "sha256:da83581c56ca175bf5888de2650cc84020602f56d8de9111d0bbefb5033252eb",
+    "name": "phase0-provisional-materials-v1"
   },
   "stages": {
     "validate_material": true,

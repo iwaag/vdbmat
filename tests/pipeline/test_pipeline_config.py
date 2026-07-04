@@ -150,6 +150,84 @@ def test_canonical_json_is_sorted_and_tight() -> None:
     assert text == json.dumps(json.loads(text), sort_keys=True, separators=(",", ":"))
 
 
+# -- File-based mappings (ADR-009 D3) ----------------------------------------------
+
+
+def _mapping_file_config(tmp_path: Path) -> PipelineConfig:
+    from vbdmat.optics import write_optical_mapping
+
+    write_optical_mapping(tmp_path / "mapping.json", phase0_provisional_mapping())
+    return direct_config(
+        mapping_name=None,
+        mapping_path="mapping.json",
+        mapping_digest=phase0_provisional_mapping().digest,
+    )
+
+
+def test_mapping_path_resolves_and_verifies_digest(tmp_path: Path) -> None:
+    config = _mapping_file_config(tmp_path)
+    resolved = config.resolve_mapping(str(tmp_path))
+    assert resolved == phase0_provisional_mapping()
+
+
+def test_mapping_path_with_wrong_digest_fails_at_resolution(tmp_path: Path) -> None:
+    from vbdmat.optics import write_optical_mapping
+
+    write_optical_mapping(tmp_path / "mapping.json", phase0_provisional_mapping())
+    config = direct_config(
+        mapping_name=None,
+        mapping_path="mapping.json",
+        mapping_digest="sha256:" + "0" * 64,
+    )
+    with pytest.raises(PipelineConfigError, match=re.escape("mapping.digest")):
+        config.resolve_mapping(str(tmp_path))
+
+
+def test_mapping_path_requires_declared_digest() -> None:
+    with pytest.raises(PipelineConfigError, match=re.escape("mapping.digest")):
+        direct_config(mapping_name=None, mapping_path="mapping.json")
+
+
+def test_mapping_name_and_path_are_mutually_exclusive() -> None:
+    with pytest.raises(PipelineConfigError, match="exactly one"):
+        direct_config(
+            mapping_name=DEFAULT_MAPPING_NAME,
+            mapping_path="mapping.json",
+            mapping_digest="sha256:" + "0" * 64,
+        )
+
+
+def test_mapping_path_requires_base_dir_to_resolve(tmp_path: Path) -> None:
+    config = _mapping_file_config(tmp_path)
+    with pytest.raises(PipelineConfigError, match="base_dir"):
+        config.resolve_mapping()
+
+
+def test_file_and_builtin_mapping_share_the_scientific_digest(tmp_path: Path) -> None:
+    # The scientific identity depends on the mapping *content* digest only, not on
+    # whether it was supplied as a builtin name or an external document.
+    assert (
+        _mapping_file_config(tmp_path).scientific_digest
+        == direct_config().scientific_digest
+    )
+
+
+def test_path_based_config_roundtrips(tmp_path: Path) -> None:
+    config = _mapping_file_config(tmp_path)
+    restored = PipelineConfig.from_json_dict(config.to_json_dict())
+    assert restored == config
+    document = config.to_json_dict()
+    assert document["mapping"]["path"] == "mapping.json"
+    assert "name" not in document["mapping"]
+
+
+def test_json_document_requires_exactly_one_mapping_reference() -> None:
+    document = direct_config().to_json_dict()
+    document["mapping"] = {"digest": "sha256:" + "0" * 64}
+    with pytest.raises(PipelineConfigError, match="exactly one"):
+        PipelineConfig.from_json_dict(document)
+
+
 # -- Invalid combinations fail before any output ----------------------------------
 
 

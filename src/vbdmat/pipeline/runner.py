@@ -123,6 +123,7 @@ def run_pipeline(
 
     config_digest = config.digest
     mapping_digest = config.mapping_digest
+    assert mapping_digest is not None  # guaranteed by PipelineConfig.__post_init__
     timestamp = (created_utc or datetime.now(UTC)).isoformat()
 
     stage = "load"
@@ -137,7 +138,7 @@ def run_pipeline(
 
         # -- map optics (in memory; equal to the persisted material) ---------------
         stage = "map-optics"
-        mapping = config.resolve_mapping()
+        mapping = config.resolve_mapping(base_dir)
         optical = map_material_volume_to_optical(material, mapping)
         optical = _restamp(
             optical, config_digest, (f"mapping-digest:{mapping_digest}",)
@@ -354,7 +355,11 @@ def _build_manifest(
             "payload_sha256": input_payload_sha256,
         },
         "material": {"configuration_digest": config_digest},
-        "mapping": {"name": config.mapping_name, "digest": mapping_digest},
+        "mapping": (
+            {"name": config.mapping_name, "digest": mapping_digest}
+            if config.mapping_name is not None
+            else {"path": config.mapping_path, "digest": mapping_digest}
+        ),
         "optical": {"configuration_digest": config_digest},
         "config_digest": config_digest,
     }

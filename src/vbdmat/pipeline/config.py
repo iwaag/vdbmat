@@ -29,7 +29,12 @@ from pathlib import Path
 from typing import Any
 
 from vbdmat.core import SchemaIdentity, SchemaVersion
-from vbdmat.optics import OpticalMappingConfig, phase0_provisional_mapping
+from vbdmat.optics import (
+    OpticalMappingConfig,
+    OpticalMappingError,
+    load_optical_mapping,
+    phase0_provisional_mapping,
+)
 
 from .errors import PipelineConfigError
 
@@ -146,7 +151,9 @@ class PipelineConfig:
     input_kind: InputKind
     input_path: str
     output_path: str
-    mapping_name: str = DEFAULT_MAPPING_NAME
+    mapping_name: str | None = None
+    mapping_path: str | None = None
+    mapping_digest: str | None = None
     validate_material: bool = True
     validate_optical: bool = True
     exports: tuple[ExportSettings, ...] = ()
@@ -170,12 +177,42 @@ class PipelineConfig:
             self, "output_path", _normalize_path("output.path", self.output_path)
         )
 
-        if self.mapping_name not in _BUILTIN_MAPPINGS:
+        # Mapping reference (ADR-009 D3): a builtin name or an external document path,
+        # never both. A file-based mapping carries its declared digest so canonical
+        # results stay a pure function of the configuration; a name-based mapping's
+        # digest is computed here (and checked when one was recorded).
+        if self.mapping_name is not None and self.mapping_path is not None:
             raise PipelineConfigError(
-                "mapping.name",
-                f"unknown mapping; must be one of {sorted(_BUILTIN_MAPPINGS)}, got "
-                f"{self.mapping_name!r}",
+                "mapping",
+                "declare exactly one of mapping.name or mapping.path, not both",
             )
+        if self.mapping_name is None and self.mapping_path is None:
+            object.__setattr__(self, "mapping_name", DEFAULT_MAPPING_NAME)
+
+        if self.mapping_name is not None:
+            if self.mapping_name not in _BUILTIN_MAPPINGS:
+                raise PipelineConfigError(
+                    "mapping.name",
+                    f"unknown mapping; must be one of {sorted(_BUILTIN_MAPPINGS)}, "
+                    f"got {self.mapping_name!r}",
+                )
+            builtin_digest = _BUILTIN_MAPPINGS[self.mapping_name]().digest
+            if self.mapping_digest is not None and (
+                self.mapping_digest != builtin_digest
+            ):
+                raise PipelineConfigError(
+                    "mapping.digest",
+                    f"recorded digest {self.mapping_digest!r} does not match "
+                    f"mapping {self.mapping_name!r} ({builtin_digest})",
+                )
+            object.__setattr__(self, "mapping_digest", builtin_digest)
+        else:
+            object.__setattr__(
+                self,
+                "mapping_path",
+                _normalize_path("mapping.path", self.mapping_path),
+            )
+            _require_digest_format("mapping.digest", self.mapping_digest)
 
         for name in ("validate_material", "validate_optical", "overwrite"):
             if not isinstance(getattr(self, name), bool):
@@ -208,14 +245,35 @@ class PipelineConfig:
 
     # -- Mapping resolution ------------------------------------------------------
 
-    def resolve_mapping(self) -> OpticalMappingConfig:
-        """Return the concrete optical mapping referenced by ``mapping_name``."""
-        return _BUILTIN_MAPPINGS[self.mapping_name]()
+    def resolve_mapping(self, base_dir: str | None = None) -> OpticalMappingConfig:
+        """Return the concrete optical mapping this configuration references.
 
-    @property
-    def mapping_digest(self) -> str:
-        """Return the ADR-007 mapping identity of the referenced optical mapping."""
-        return self.resolve_mapping().digest
+        A builtin mapping resolves without I/O. A file-based mapping requires an
+        explicit ``base_dir``, is loaded from disk, and must hash to the declared
+        ``mapping.digest`` — a swapped or edited mapping file fails here rather
+        than silently changing canonical results (ADR-009 D3).
+        """
+        if self.mapping_name is not None:
+            return _BUILTIN_MAPPINGS[self.mapping_name]()
+        if base_dir is None:
+            raise PipelineConfigError(
+                "mapping.path",
+                "resolving a file-based mapping requires an explicit base_dir",
+            )
+        assert self.mapping_path is not None  # guaranteed by __post_init__
+        resolved = _resolve_against(base_dir, self.mapping_path)
+        try:
+            mapping = load_optical_mapping(resolved)
+        except OpticalMappingError as error:
+            raise PipelineConfigError("mapping.path", str(error)) from error
+        if mapping.digest != self.mapping_digest:
+            raise PipelineConfigError(
+                "mapping.digest",
+                f"mapping document at {self.mapping_path!r} hashes to "
+                f"{mapping.digest}, but the configuration declares "
+                f"{self.mapping_digest}",
+            )
+        return mapping
 
     # -- Path resolution ---------------------------------------------------------
 
@@ -231,6 +289,11 @@ class PipelineConfig:
 
     def to_json_dict(self) -> dict[str, Any]:
         """Return the exact, portable JSON object recorded as ``config.json``."""
+        mapping_section: dict[str, Any] = {"digest": self.mapping_digest}
+        if self.mapping_name is not None:
+            mapping_section["name"] = self.mapping_name
+        else:
+            mapping_section["path"] = self.mapping_path
         document: dict[str, Any] = {
             "schema": {
                 "name": PIPELINE_CONFIG_SCHEMA.name,
@@ -240,7 +303,7 @@ class PipelineConfig:
                 "kind": self.input_kind.value,
                 "path": self.input_path,
             },
-            "mapping": {"name": self.mapping_name, "digest": self.mapping_digest},
+            "mapping": mapping_section,
             "stages": {
                 "validate_material": self.validate_material,
                 "validate_optical": self.validate_optical,
@@ -268,12 +331,13 @@ class PipelineConfig:
 
         This excludes ``output``, ``overwrite``, ``exports`` and ``renderer`` so that
         those cannot change the canonical material/optical volumes. It also excludes
-        the input *path*, since canonical results depend on the input payload content
-        (ADR-007 D3), not on where the input file lives.
+        the input *path* and the mapping *path/name*: canonical results depend on the
+        input payload content and the mapping content digest (ADR-007 D3, ADR-009
+        D3), not on where either lives or how it was supplied.
         """
         payload = {
             "input": {"kind": self.input_kind.value},
-            "mapping": {"name": self.mapping_name, "digest": self.mapping_digest},
+            "mapping": {"digest": self.mapping_digest},
             "stages": {
                 "validate_material": self.validate_material,
                 "validate_optical": self.validate_optical,
@@ -308,8 +372,13 @@ class PipelineConfig:
         _require_key("input", input_section, "path")
 
         mapping_section = _require_mapping("mapping", data.get("mapping"))
-        _reject_unknown_keys("mapping", mapping_section, {"name", "digest"})
-        _require_key("mapping", mapping_section, "name")
+        _reject_unknown_keys("mapping", mapping_section, {"name", "path", "digest"})
+        if ("name" in mapping_section) == ("path" in mapping_section):
+            raise PipelineConfigError(
+                "mapping", "declare exactly one of mapping.name or mapping.path"
+            )
+        if "path" in mapping_section:
+            _require_key("mapping", mapping_section, "digest")
 
         stages_section = _require_mapping("stages", data.get("stages"))
         _reject_unknown_keys(
@@ -336,11 +405,13 @@ class PipelineConfig:
             else RendererConfig.from_json_dict(renderer_section)
         )
 
-        config = cls(
+        return cls(
             input_kind=input_section["kind"],
             input_path=input_section["path"],
             output_path=output_section["path"],
-            mapping_name=mapping_section["name"],
+            mapping_name=mapping_section.get("name"),
+            mapping_path=mapping_section.get("path"),
+            mapping_digest=mapping_section.get("digest"),
             validate_material=stages_section.get("validate_material", True),
             validate_optical=stages_section.get("validate_optical", True),
             exports=exports,
@@ -348,8 +419,6 @@ class PipelineConfig:
             random_seed=execution_section.get("random_seed", 0),
             renderer=renderer,
         )
-        _check_recorded_mapping_digest(mapping_section, config)
-        return config
 
     @classmethod
     def from_json(cls, text: str) -> "PipelineConfig":
@@ -427,13 +496,16 @@ def _check_schema(data: Mapping[str, Any]) -> None:
         )
 
 
-def _check_recorded_mapping_digest(
-    mapping_section: Mapping[str, Any], config: "PipelineConfig"
-) -> None:
-    recorded = mapping_section.get("digest")
-    if recorded is not None and recorded != config.mapping_digest:
+def _require_digest_format(field_path: str, value: Any) -> None:
+    if not isinstance(value, str):
         raise PipelineConfigError(
-            "mapping.digest",
-            f"recorded digest {recorded!r} does not match mapping "
-            f"{config.mapping_name!r} ({config.mapping_digest})",
+            field_path,
+            "a file-based mapping requires its declared sha256 digest (ADR-009 D3)",
+        )
+    prefix, _, digest = value.partition(":")
+    if prefix != "sha256" or len(digest) != 64 or any(
+        char not in "0123456789abcdef" for char in digest
+    ):
+        raise PipelineConfigError(
+            field_path, "must be 'sha256:' followed by 64 lowercase hex digits"
         )

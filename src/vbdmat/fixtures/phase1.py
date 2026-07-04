@@ -102,10 +102,10 @@ def window_coupon_palette() -> MaterialPalette:
     """Return the coupon material palette (background, transparent, white, black)."""
     return MaterialPalette.from_sequence(
         (
-            MaterialDefinition(0, "background", MaterialRole.BACKGROUND),
-            MaterialDefinition(1, "transparent", MaterialRole.MATERIAL),
-            MaterialDefinition(2, "white", MaterialRole.MATERIAL),
-            MaterialDefinition(3, "black", MaterialRole.MATERIAL),
+            MaterialDefinition(0, "air", MaterialRole.BACKGROUND),
+            MaterialDefinition(1, "transparent-resin", MaterialRole.MATERIAL),
+            MaterialDefinition(2, "white-resin", MaterialRole.MATERIAL),
+            MaterialDefinition(3, "black-opaque-resin", MaterialRole.MATERIAL),
         )
     )
 
@@ -139,10 +139,10 @@ def window_coupon_manifest(payload_sha256: str) -> dict[str, Any]:
             [0, 0, 0, 1],
         ],
         "materials": [
-            {"material_id": 0, "name": "background", "role": "background"},
-            {"material_id": 1, "name": "transparent", "role": "material"},
-            {"material_id": 2, "name": "white", "role": "material"},
-            {"material_id": 3, "name": "black", "role": "material"},
+            {"material_id": 0, "name": "air", "role": "background"},
+            {"material_id": 1, "name": "transparent-resin", "role": "material"},
+            {"material_id": 2, "name": "white-resin", "role": "material"},
+            {"material_id": 3, "name": "black-opaque-resin", "role": "material"},
         ],
         "source": {
             "generator": PHASE1_FIXTURE_GENERATOR,
@@ -240,7 +240,7 @@ def stepped_wedge_palette() -> MaterialPalette:
     """Return the wedge material palette (background, transparent resin)."""
     return MaterialPalette.from_sequence(
         (
-            MaterialDefinition(0, "background", MaterialRole.BACKGROUND),
+            MaterialDefinition(0, "air", MaterialRole.BACKGROUND),
             MaterialDefinition(
                 _WEDGE_MATERIAL_ID, _WEDGE_MATERIAL_NAME, MaterialRole.MATERIAL
             ),
@@ -278,7 +278,7 @@ def stepped_wedge_manifest(payload_sha256: str) -> dict[str, Any]:
             [0, 0, 0, 1],
         ],
         "materials": [
-            {"material_id": 0, "name": "background", "role": "background"},
+            {"material_id": 0, "name": "air", "role": "background"},
             {
                 "material_id": _WEDGE_MATERIAL_ID,
                 "name": _WEDGE_MATERIAL_NAME,

@@ -64,6 +64,23 @@ def _require_palette_coverage(
             "palette.material_ids",
             f"mapping config is missing declared material IDs {missing}",
         )
+    # ADR-009 D4: the simulation-side contract is material_id plus name. A palette
+    # and mapping that disagree on the name of a shared ID are describing different
+    # materials; failing here prevents silently applying the wrong coefficients.
+    mismatched = tuple(
+        (item.material_id, item.name, config.by_id(item.material_id).name)
+        for item in volume.palette
+        if item.name != config.by_id(item.material_id).name
+    )
+    if mismatched:
+        details = "; ".join(
+            f"id {material_id}: palette {palette_name!r} vs mapping {mapping_name!r}"
+            for material_id, palette_name, mapping_name in mismatched
+        )
+        raise OpticalMappingError(
+            "palette.materials",
+            f"material names disagree with the mapping for shared IDs ({details})",
+        )
 
 
 def _map_labels(

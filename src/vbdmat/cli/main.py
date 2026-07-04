@@ -40,7 +40,11 @@ from vbdmat.io import (
     read_volume,
     write_volume,
 )
-from vbdmat.optics import OpticalMappingError, map_material_volume_to_optical
+from vbdmat.optics import (
+    OpticalMappingError,
+    load_optical_mapping,
+    map_material_volume_to_optical,
+)
 from vbdmat.pipeline import (
     DEFAULT_MAPPING_NAME,
     InputKind,
@@ -90,10 +94,24 @@ def _parser() -> argparse.ArgumentParser:
     _paths(convert_parser, "MATERIAL_ZARR")
     convert_parser.add_argument(
         "--mapping",
-        default=DEFAULT_MAPPING_NAME,
+        default=None,
         help=f"builtin mapping (default: {DEFAULT_MAPPING_NAME}); {_PROVISIONAL}",
     )
+    convert_parser.add_argument(
+        "--mapping-file",
+        type=Path,
+        default=None,
+        help="external vbdmat.optical-mapping JSON document (ADR-009)",
+    )
     _writer_flags(convert_parser)
+
+    digest_parser = commands.add_parser(
+        "mapping-digest",
+        help="report the canonical digest of a vbdmat.optical-mapping document",
+    )
+    command_parsers.append(digest_parser)
+    digest_parser.add_argument("mapping_file", type=Path, metavar="MAPPING")
+    digest_parser.add_argument("--json", action="store_true", dest="json_output")
 
     for name, help_text in (
         ("inspect", "inspect a canonical Zarr asset or run bundle"),
@@ -199,13 +217,27 @@ def _dispatch(arguments: argparse.Namespace) -> dict[str, Any]:
                 raise CliError(
                     ExitCode.CONVERSION, "convert input must be a material volume"
                 )
-            config = _mapping(arguments.mapping)
-            optical = map_material_volume_to_optical(material, config.resolve_mapping())
+            mapping = _resolve_cli_mapping(arguments.mapping, arguments.mapping_file)
+            optical = map_material_volume_to_optical(material, mapping)
             write_volume(arguments.output, optical, overwrite=arguments.overwrite)
             document = _asset_result(command, arguments.output, optical)
-            document["mapping"] = arguments.mapping
-            document["mapping_digest"] = config.mapping_digest
+            document["mapping"] = (
+                arguments.mapping
+                if arguments.mapping_file is None
+                else str(arguments.mapping_file)
+            ) or DEFAULT_MAPPING_NAME
+            document["mapping_digest"] = mapping.digest
             return document
+        if command == "mapping-digest":
+            mapping = load_optical_mapping(arguments.mapping_file)
+            return {
+                "status": "ok",
+                "operation": "mapping-digest",
+                "path": str(arguments.mapping_file),
+                "configuration_id": mapping.configuration_id,
+                "version": str(mapping.version),
+                "digest": mapping.digest,
+            }
         if command == "inspect":
             return _inspect(arguments.asset, validate=False)
         if command == "validate":
@@ -285,16 +317,26 @@ def _dispatch(arguments: argparse.Namespace) -> dict[str, Any]:
     raise CliError(ExitCode.USAGE, f"unknown command: {command}")
 
 
-def _mapping(name: str) -> PipelineConfig:
+def _resolve_cli_mapping(name: str | None, mapping_file: Path | None) -> Any:
+    if name is not None and mapping_file is not None:
+        raise CliError(
+            ExitCode.USAGE, "use either --mapping or --mapping-file, not both"
+        )
+    if mapping_file is not None:
+        return load_optical_mapping(mapping_file)
+    resolved = name if name is not None else DEFAULT_MAPPING_NAME
     try:
-        return PipelineConfig(
+        config = PipelineConfig(
             input_kind=InputKind.DIRECT_VOXEL,
             input_path="unused",
             output_path="unused",
-            mapping_name=name,
+            mapping_name=resolved,
         )
     except (KeyError, PipelineConfigError) as error:
-        raise CliError(ExitCode.CONVERSION, f"unsupported mapping: {name}") from error
+        raise CliError(
+            ExitCode.CONVERSION, f"unsupported mapping: {resolved}"
+        ) from error
+    return config.resolve_mapping()
 
 
 def _refuse_overwrite(path: Path, overwrite: bool) -> None:

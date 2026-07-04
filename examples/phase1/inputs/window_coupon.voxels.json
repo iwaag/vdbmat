@@ -51,22 +51,22 @@
   "materials": [
     {
       "material_id": 0,
-      "name": "background",
+      "name": "air",
       "role": "background"
     },
     {
       "material_id": 1,
-      "name": "transparent",
+      "name": "transparent-resin",
       "role": "material"
     },
     {
       "material_id": 2,
-      "name": "white",
+      "name": "white-resin",
       "role": "material"
     },
     {
       "material_id": 3,
-      "name": "black",
+      "name": "black-opaque-resin",
       "role": "material"
     }
   ],

@@ -92,6 +92,46 @@ def test_import_convert_inspect_and_validate(inputs: Path, tmp_path: Path) -> No
     }
 
 
+def test_convert_with_external_mapping_file_matches_builtin(
+    inputs: Path, tmp_path: Path
+) -> None:
+    from vbdmat.optics import phase0_provisional_mapping, write_optical_mapping
+
+    mapping_file = tmp_path / "mapping.optical-mapping.json"
+    write_optical_mapping(mapping_file, phase0_provisional_mapping())
+
+    material = tmp_path / "material.zarr"
+    assert (
+        _run("import-voxels", inputs / "window_coupon.voxels.json", material).returncode
+        == 0
+    )
+    builtin = _run("convert", material, tmp_path / "builtin.zarr", "--json")
+    external = _run(
+        "convert",
+        material,
+        tmp_path / "external.zarr",
+        "--mapping-file",
+        mapping_file,
+        "--json",
+    )
+    assert builtin.returncode == 0 and external.returncode == 0
+    assert _json(builtin)["mapping_digest"] == _json(external)["mapping_digest"]
+    assert zarr_store_sha256(tmp_path / "builtin.zarr") == zarr_store_sha256(
+        tmp_path / "external.zarr"
+    )
+
+    digest = _run("mapping-digest", mapping_file, "--json")
+    assert digest.returncode == 0
+    assert _json(digest)["digest"] == _json(builtin)["mapping_digest"]
+
+    both = _run(
+        "convert", material, tmp_path / "x.zarr",
+        "--mapping", "phase0-provisional-materials-v1",
+        "--mapping-file", mapping_file,
+    )
+    assert both.returncode == 2
+
+
 def test_run_and_bundle_inspection(inputs: Path, tmp_path: Path) -> None:
     config = json.loads(
         (Path("examples/phase1/configs/window_coupon.run.json")).read_text()
