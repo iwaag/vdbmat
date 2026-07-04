@@ -34,11 +34,9 @@ from vbdmat.exporters import (
     export_restored_optical,
 )
 from vbdmat.io import (
-    MeshReadError,
     VolumeIOError,
     VoxelManifestError,
     read_material_label_manifest,
-    read_stl,
     read_volume,
     write_volume,
 )
@@ -53,7 +51,6 @@ from vbdmat.pipeline import (
     sha256_file,
     zarr_store_sha256,
 )
-from vbdmat.voxelize import MeshTopologyError, VoxelizationError, voxelize_mesh
 
 from .errors import CliError, ExitCode
 from .output import human_summary, json_line
@@ -85,34 +82,6 @@ def _parser() -> argparse.ArgumentParser:
     command_parsers.append(import_parser)
     _paths(import_parser, "MANIFEST")
     _writer_flags(import_parser)
-
-    voxelize_parser = commands.add_parser(
-        "voxelize", help="voxelize one watertight STL into material Zarr"
-    )
-    command_parsers.append(voxelize_parser)
-    _paths(voxelize_parser, "MESH")
-    voxelize_parser.add_argument(
-        "--unit", required=True, choices=("m", "mm"), help="explicit STL unit"
-    )
-    voxelize_parser.add_argument(
-        "--voxel-size",
-        required=True,
-        metavar="M[,M,M]",
-        help="voxel size in metres: one scalar or explicit X,Y,Z values",
-    )
-    voxelize_parser.add_argument(
-        "--material-id", required=True, type=int, help="material ID in [1, 65535]"
-    )
-    voxelize_parser.add_argument(
-        "--material-name", default="material", help="material palette name"
-    )
-    voxelize_parser.add_argument(
-        "--placement", type=Path, help="JSON file containing a rigid 4x4 matrix"
-    )
-    voxelize_parser.add_argument(
-        "--padding-cells", type=int, default=1, help="domain padding (default: 1)"
-    )
-    _writer_flags(voxelize_parser)
 
     convert_parser = commands.add_parser(
         "convert", help="map canonical material Zarr to optical Zarr"
@@ -223,32 +192,6 @@ def _dispatch(arguments: argparse.Namespace) -> dict[str, Any]:
             volume = read_material_label_manifest(arguments.input)
             write_volume(arguments.output, volume, overwrite=arguments.overwrite)
             return _asset_result(command, arguments.output, volume)
-        if command == "voxelize":
-            _refuse_overwrite(arguments.output, arguments.overwrite)
-            placement = _placement(arguments.placement)
-            voxelization = voxelize_mesh(
-                read_stl(arguments.input),
-                source_unit=arguments.unit,
-                voxel_size_xyz_m=_voxel_size(arguments.voxel_size),
-                material_id=arguments.material_id,
-                material_name=arguments.material_name,
-                placement=placement,
-                padding_cells=arguments.padding_cells,
-                identity=str(arguments.input),
-            )
-            write_volume(
-                arguments.output,
-                voxelization.volume,
-                overwrite=arguments.overwrite,
-            )
-            document = _asset_result(command, arguments.output, voxelization.volume)
-            document["diagnostics"] = {
-                "triangle_count": voxelization.diagnostics.triangle_count,
-                "occupied_cells": voxelization.diagnostics.occupied_cells,
-                "bounds_min_xyz_m": list(voxelization.diagnostics.bounds_min_xyz_m),
-                "bounds_max_xyz_m": list(voxelization.diagnostics.bounds_max_xyz_m),
-            }
-            return document
         if command == "convert":
             _refuse_overwrite(arguments.output, arguments.overwrite)
             material = read_volume(arguments.input)
@@ -316,10 +259,7 @@ def _dispatch(arguments: argparse.Namespace) -> dict[str, Any]:
     except VoxelManifestError as error:
         code = _manifest_error_code(error)
         raise CliError(code, str(error)) from error
-    except MeshReadError as error:
-        code = ExitCode.IO if "file not found" in error.message else ExitCode.VALIDATION
-        raise CliError(code, str(error)) from error
-    except (MeshTopologyError, VoxelizationError, VolumeValidationError) as error:
+    except VolumeValidationError as error:
         raise CliError(ExitCode.VALIDATION, str(error)) from error
     except VolumeIOError as error:
         code = ExitCode.IO if error.field_path == "store" else ExitCode.VALIDATION
@@ -408,38 +348,6 @@ def _atomic_export(
         output / path.relative_to(outcome.output_path) for path in outcome.artifacts
     )
     return dataclasses.replace(outcome, output_path=output, artifacts=artifacts)
-
-
-def _voxel_size(text: str) -> tuple[float, float, float]:
-    try:
-        values = tuple(float(item) for item in text.split(","))
-    except ValueError as error:
-        raise CliError(
-            ExitCode.USAGE, "--voxel-size must contain numeric metre values"
-        ) from error
-    if len(values) == 1:
-        return (values[0], values[0], values[0])
-    if len(values) == 3:
-        return values
-    raise CliError(
-        ExitCode.USAGE, "--voxel-size must be one scalar or three X,Y,Z values"
-    )
-
-
-def _placement(path: Path | None) -> Any:
-    if path is None:
-        return (
-            (1.0, 0.0, 0.0, 0.0),
-            (0.0, 1.0, 0.0, 0.0),
-            (0.0, 0.0, 1.0, 0.0),
-            (0.0, 0.0, 0.0, 1.0),
-        )
-    try:
-        return json.loads(_read_text(path, "placement"))
-    except json.JSONDecodeError as error:
-        raise CliError(
-            ExitCode.VALIDATION, f"placement: invalid JSON: {error}"
-        ) from error
 
 
 def _read_text(path: Path, label: str) -> str:

@@ -1,16 +1,17 @@
-"""Deterministic Phase 1 representative input fixtures (plan Step 4).
+"""Deterministic Phase 1 representative input fixtures (plan Step 4, ADR-009).
 
-Two reviewable, analytically specified inputs exercise the Phase 1 readers end to
-end without opaque binaries:
+Two reviewable, analytically specified inputs exercise the ``vbdmat.voxels/1.0.0``
+direct-voxel contract end to end without opaque binaries:
 
-* a **multi-material window coupon** for the direct ``vbdmat.voxels/1.0.0`` path
-  (a transparent matrix with one white inclusion and one asymmetric black marker);
-* a **single-material stepped wedge** for the mesh path (a watertight staircase with
-  analytically predictable per-step occupancy).
+* a **multi-material window coupon** (a transparent matrix with one white inclusion
+  and one asymmetric black marker);
+* a **single-material stepped wedge** (a staircase occupancy with analytically
+  predictable per-step cell counts), standing in for output of an external
+  geometry-to-voxel generator.
 
 Every generator is pure and deterministic. The expected summaries here are derived
-analytically from the fixture *definition*, not from the reader/voxelizer under
-test, so a test comparing reader output to these values is a genuine check.
+analytically from the fixture *definition*, not from the reader under test, so a
+test comparing reader output to these values is a genuine check.
 """
 
 from __future__ import annotations
@@ -185,132 +186,135 @@ def window_coupon_summary() -> CouponSummary:
 
 
 # --------------------------------------------------------------------------- #
-# Single-material stepped wedge (mesh path)
+# Single-material stepped wedge (analytic staircase occupancy)
 # --------------------------------------------------------------------------- #
 
 _WEDGE_STEPS = 4
-_WEDGE_RUN_MM = 4.0  # step run along +X
-_WEDGE_RISE_MM = 2.0  # step rise along +Z
-_WEDGE_DEPTH_MM = 6.0  # extrusion depth along +Y
-_WEDGE_APEX_INDEX = 1  # profile vertex (N*run, 0), a kernel point of the region
+_WEDGE_RUN_CELLS = 4  # step run along +X, in 1 mm cells
+_WEDGE_RISE_CELLS = 2  # step rise along +Z, in 1 mm cells
+_WEDGE_DEPTH_CELLS = 6  # extrusion depth along +Y, in 1 mm cells
+_WEDGE_PADDING_CELLS = 1
+_WEDGE_VOXEL_SIZE_XYZ_M = (0.001, 0.001, 0.001)
+_WEDGE_MATERIAL_ID = 1
+_WEDGE_MATERIAL_NAME = "transparent-resin"
 
-WEDGE_MESH_NAME = "stepped_wedge.stl"
+WEDGE_MANIFEST_NAME = "stepped_wedge.voxels.json"
+WEDGE_PAYLOAD_NAME = "stepped_wedge.material_id.npy"
 
 
 @dataclass(frozen=True, slots=True)
 class WedgeSummary:
-    """Analytic expectations for the stepped-wedge voxelization at 1 mm voxels."""
+    """Analytic, implementation-independent expectations for the wedge."""
 
-    source_unit: str
-    voxel_size_xyz_m: tuple[float, float, float]
-    material_id: int
-    triangle_count: int
-    bounds_min_xyz_m: tuple[float, float, float]
-    bounds_max_xyz_m: tuple[float, float, float]
     shape_zyx: tuple[int, int, int]
+    voxel_size_xyz_m: tuple[float, float, float]
+    local_to_world_translation_m: tuple[float, float, float]
+    material_id: int
     occupied_cells: int
     per_step_occupied: dict[int, int]
+    payload_sha256: str
 
 
-def _wedge_profile_xz() -> list[tuple[float, float]]:
-    """Return the closed staircase profile in the X-Z plane (units applied later)."""
-    n = _WEDGE_STEPS
-    run = _WEDGE_RUN_MM
-    rise = _WEDGE_RISE_MM
-    profile: list[tuple[float, float]] = [
-        (0.0, 0.0),
-        (n * run, 0.0),
-        (n * run, n * rise),
-    ]
-    for k in range(n, 0, -1):
-        profile.append(((k - 1) * run, k * rise))
-        if k > 1:
-            profile.append(((k - 1) * run, (k - 1) * rise))
-    return profile
+def stepped_wedge_label() -> npt.NDArray[np.uint16]:
+    """Return the deterministic wedge label array (``uint16[z, y, x]``).
 
-
-def stepped_wedge_triangles() -> list[
-    tuple[
-        tuple[float, float, float],
-        tuple[float, float, float],
-        tuple[float, float, float],
-    ]
-]:
-    """Return the watertight stepped-wedge triangles in millimetres.
-
-    The solid is the staircase profile extruded along +Y. Walls follow the profile
-    order; the two caps fan from a kernel vertex with the opposite winding, so every
-    shared edge is traversed once in each direction (a single, consistently oriented,
-    2-manifold solid).
+    Step ``k`` (1-based, ascending along +X) occupies a run of
+    ``_WEDGE_RUN_CELLS`` cells with height ``k * _WEDGE_RISE_CELLS`` cells over the
+    full extrusion depth, surrounded by one padding cell of background on every
+    side.
     """
-    profile = _wedge_profile_xz()
-    depth = _WEDGE_DEPTH_MM
-    apex = _WEDGE_APEX_INDEX
-    n = len(profile)
-    front = [(x, 0.0, z) for (x, z) in profile]
-    back = [(x, depth, z) for (x, z) in profile]
-
-    triangles: list[
-        tuple[
-            tuple[float, float, float],
-            tuple[float, float, float],
-            tuple[float, float, float],
-        ]
-    ] = []
-    for i in range(n):
-        j = (i + 1) % n
-        triangles.append((front[i], front[j], back[j]))
-        triangles.append((front[i], back[j], back[i]))
-    for i in range(n):
-        j = (i + 1) % n
-        if i == apex or j == apex:
-            continue
-        triangles.append((front[apex], front[j], front[i]))  # y=0 cap, reversed
-        triangles.append((back[apex], back[i], back[j]))  # y=depth cap
-    return triangles
+    pad = _WEDGE_PADDING_CELLS
+    shape_z = _WEDGE_STEPS * _WEDGE_RISE_CELLS + 2 * pad
+    shape_y = _WEDGE_DEPTH_CELLS + 2 * pad
+    shape_x = _WEDGE_STEPS * _WEDGE_RUN_CELLS + 2 * pad
+    label = np.zeros((shape_z, shape_y, shape_x), dtype=np.uint16)
+    for k in range(1, _WEDGE_STEPS + 1):
+        xs = slice(pad + (k - 1) * _WEDGE_RUN_CELLS, pad + k * _WEDGE_RUN_CELLS)
+        zs = slice(pad, pad + k * _WEDGE_RISE_CELLS)
+        ys = slice(pad, pad + _WEDGE_DEPTH_CELLS)
+        label[zs, ys, xs] = _WEDGE_MATERIAL_ID
+    return label
 
 
-def stepped_wedge_stl_bytes() -> bytes:
-    """Return a deterministic ASCII STL of the stepped wedge (units: millimetres)."""
-    lines = ["solid stepped_wedge"]
-    for a, b, c in stepped_wedge_triangles():
-        lines.append("facet normal 0 0 0")
-        lines.append("outer loop")
-        for vertex in (a, b, c):
-            lines.append(f"vertex {vertex[0]:.6f} {vertex[1]:.6f} {vertex[2]:.6f}")
-        lines.append("endloop")
-        lines.append("endfacet")
-    lines.append("endsolid stepped_wedge")
-    return ("\n".join(lines) + "\n").encode("ascii")
+def stepped_wedge_palette() -> MaterialPalette:
+    """Return the wedge material palette (background, transparent resin)."""
+    return MaterialPalette.from_sequence(
+        (
+            MaterialDefinition(0, "background", MaterialRole.BACKGROUND),
+            MaterialDefinition(
+                _WEDGE_MATERIAL_ID, _WEDGE_MATERIAL_NAME, MaterialRole.MATERIAL
+            ),
+        )
+    )
+
+
+def stepped_wedge_payload_bytes() -> bytes:
+    """Return the exact ``.npy`` bytes of the wedge payload."""
+    buffer = io.BytesIO()
+    np.save(buffer, stepped_wedge_label())
+    return buffer.getvalue()
+
+
+def stepped_wedge_manifest(payload_sha256: str) -> dict[str, Any]:
+    """Return the ``vbdmat.voxels/1.0.0`` manifest document for the wedge."""
+    label_shape = stepped_wedge_label().shape
+    pad_m = _WEDGE_PADDING_CELLS * _WEDGE_VOXEL_SIZE_XYZ_M[0]
+    return {
+        "format": "vbdmat.voxels",
+        "format_version": "1.0.0",
+        "asset_type": "material-label",
+        "payload": {
+            "path": WEDGE_PAYLOAD_NAME,
+            "sha256": payload_sha256,
+            "dtype": "uint16",
+            "dimensions": ["z", "y", "x"],
+        },
+        "shape_zyx": list(label_shape),
+        "voxel_size_xyz_m": list(_WEDGE_VOXEL_SIZE_XYZ_M),
+        "local_to_world": [
+            [1, 0, 0, -pad_m],
+            [0, 1, 0, -pad_m],
+            [0, 0, 1, -pad_m],
+            [0, 0, 0, 1],
+        ],
+        "materials": [
+            {"material_id": 0, "name": "background", "role": "background"},
+            {
+                "material_id": _WEDGE_MATERIAL_ID,
+                "name": _WEDGE_MATERIAL_NAME,
+                "role": "material",
+            },
+        ],
+        "source": {
+            "generator": PHASE1_FIXTURE_GENERATOR,
+            "generator_version": PHASE1_FIXTURE_GENERATOR_VERSION,
+            "identity": "stepped-wedge",
+            "notes": (
+                "Phase 1 single-material stepped wedge; analytic staircase "
+                "occupancy standing in for an external geometry-to-voxel "
+                "generator (ADR-009). Research fixture, not a printer-vendor "
+                "format."
+            ),
+        },
+    }
 
 
 def stepped_wedge_summary() -> WedgeSummary:
-    """Return analytic wedge expectations at 1 mm isotropic voxels with padding 1."""
-    n = _WEDGE_STEPS
-    run_cells = int(_WEDGE_RUN_MM)  # 1 mm voxels
-    rise_cells = int(_WEDGE_RISE_MM)
-    depth_cells = int(_WEDGE_DEPTH_MM)
-    # Step k spans a run of cells, height (rise * k) cells, depth cells.
-    per_step = {k: run_cells * depth_cells * (rise_cells * k) for k in range(1, n + 1)}
-    occupied = sum(per_step.values())
-    # Padding of one cell each side: interior 16x6x8 mm grid becomes 18x8x10.
-    shape_x = n * run_cells + 2
-    shape_y = depth_cells + 2
-    shape_z = n * rise_cells + 2
+    """Return the analytic wedge summary (derived from the definition, not readers)."""
+    per_step = {
+        k: _WEDGE_RUN_CELLS * _WEDGE_DEPTH_CELLS * (_WEDGE_RISE_CELLS * k)
+        for k in range(1, _WEDGE_STEPS + 1)
+    }
+    label_shape = stepped_wedge_label().shape
+    pad_m = _WEDGE_PADDING_CELLS * _WEDGE_VOXEL_SIZE_XYZ_M[0]
     return WedgeSummary(
-        source_unit="mm",
-        voxel_size_xyz_m=(0.001, 0.001, 0.001),
-        material_id=1,
-        triangle_count=len(stepped_wedge_triangles()),
-        bounds_min_xyz_m=(0.0, 0.0, 0.0),
-        bounds_max_xyz_m=(
-            n * _WEDGE_RUN_MM / 1000.0,
-            _WEDGE_DEPTH_MM / 1000.0,
-            n * _WEDGE_RISE_MM / 1000.0,
-        ),
-        shape_zyx=(shape_z, shape_y, shape_x),
-        occupied_cells=occupied,
+        shape_zyx=(label_shape[0], label_shape[1], label_shape[2]),
+        voxel_size_xyz_m=_WEDGE_VOXEL_SIZE_XYZ_M,
+        local_to_world_translation_m=(-pad_m, -pad_m, -pad_m),
+        material_id=_WEDGE_MATERIAL_ID,
+        occupied_cells=sum(per_step.values()),
         per_step_occupied=per_step,
+        payload_sha256=hashlib.sha256(stepped_wedge_payload_bytes()).hexdigest(),
     )
 
 
@@ -370,9 +374,19 @@ def write_phase1_fixtures(directory: str | Path) -> dict[str, Path]:
     )
     written["coupon_summary"] = coupon_summary_path
 
-    mesh_path = base / WEDGE_MESH_NAME
-    mesh_path.write_bytes(stepped_wedge_stl_bytes())
-    written["wedge_mesh"] = mesh_path
+    wedge_payload = stepped_wedge_payload_bytes()
+    wedge_sha = hashlib.sha256(wedge_payload).hexdigest()
+
+    wedge_payload_path = base / WEDGE_PAYLOAD_NAME
+    wedge_payload_path.write_bytes(wedge_payload)
+    written["wedge_payload"] = wedge_payload_path
+
+    wedge_manifest_path = base / WEDGE_MANIFEST_NAME
+    wedge_manifest_path.write_text(
+        json.dumps(stepped_wedge_manifest(wedge_sha), indent=2) + "\n",
+        encoding="utf-8",
+    )
+    written["wedge_manifest"] = wedge_manifest_path
 
     wedge_summary_path = base / "stepped_wedge.expected.json"
     wedge_summary_path.write_text(

@@ -16,6 +16,7 @@ from vbdmat.io import (
     VoxelManifestError,
     inspect_material_label_manifest,
     read_material_label_manifest,
+    write_material_label_manifest,
 )
 
 
@@ -244,6 +245,34 @@ def test_unknown_top_level_field_fails(tmp_path: Path) -> None:
     with pytest.raises(VoxelManifestError) as info:
         read_material_label_manifest(_write(tmp_path, manifest, payload))
     assert info.value.field_path == "manifest"
+
+
+def test_writer_output_round_trips_through_the_reader(tmp_path: Path) -> None:
+    payload = _payload_bytes(_coupon_label())
+    manifest = _base_manifest(hashlib.sha256(payload).hexdigest())
+    volume = read_material_label_manifest(_write(tmp_path, manifest, payload))
+
+    out_dir = tmp_path / "emitted"
+    manifest_path = write_material_label_manifest(
+        out_dir, "roundtrip", volume, identity="writer-roundtrip"
+    )
+    assert manifest_path == out_dir / "roundtrip.voxels.json"
+
+    restored = read_material_label_manifest(manifest_path)
+    assert restored.geometry == volume.geometry
+    assert restored.palette == volume.palette
+    np.testing.assert_array_equal(restored.material_id, volume.material_id)
+    assert restored.provenance.generator == volume.provenance.generator
+    assert "identity:writer-roundtrip" in restored.provenance.sources
+
+
+def test_writer_rejects_invalid_name(tmp_path: Path) -> None:
+    payload = _payload_bytes(_coupon_label())
+    manifest = _base_manifest(hashlib.sha256(payload).hexdigest())
+    volume = read_material_label_manifest(_write(tmp_path, manifest, payload))
+    with pytest.raises(VoxelManifestError) as info:
+        write_material_label_manifest(tmp_path, "a/b", volume)
+    assert info.value.field_path == "name"
 
 
 def test_import_does_not_require_zarr_or_renderers() -> None:

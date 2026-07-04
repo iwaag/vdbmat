@@ -1,16 +1,12 @@
 {
-  "bounds_max_xyz_m": [
-    0.016,
-    0.006,
-    0.008
-  ],
-  "bounds_min_xyz_m": [
-    0.0,
-    0.0,
-    0.0
+  "local_to_world_translation_m": [
+    -0.001,
+    -0.001,
+    -0.001
   ],
   "material_id": 1,
   "occupied_cells": 480,
+  "payload_sha256": "6a4bff1b176224a01489bb2638679e9513ac3f29dfe98e1df14826a49f25572a",
   "per_step_occupied": {
     "1": 48,
     "2": 96,
@@ -22,8 +18,6 @@
     8,
     18
   ],
-  "source_unit": "mm",
-  "triangle_count": 36,
   "voxel_size_xyz_m": [
     0.001,
     0.001,

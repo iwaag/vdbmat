@@ -148,11 +148,8 @@ src/vbdmat/
     config.py
     mapping.py
   io/
-    mesh.py
     voxel_manifest.py
     zarr.py
-  voxelize/
-    mesh.py
   pipeline/
     artifacts.py
     config.py

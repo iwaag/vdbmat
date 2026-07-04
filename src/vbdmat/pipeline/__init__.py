@@ -15,7 +15,6 @@ from .config import (
     ExportSettings,
     ExportTarget,
     InputKind,
-    MeshVoxelizationSettings,
     PipelineConfig,
     RendererConfig,
 )
@@ -38,7 +37,6 @@ __all__ = [
     "ExportSettings",
     "ExportTarget",
     "InputKind",
-    "MeshVoxelizationSettings",
     "PipelineConfig",
     "PipelineConfigError",
     "PipelineRunError",

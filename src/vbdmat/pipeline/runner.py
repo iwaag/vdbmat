@@ -2,9 +2,9 @@
 
 Implements ADR-007: a fixed, typed stage sequence
 
-    load/voxelize -> validate material -> persist material
-                  -> map optics -> validate optical -> persist optical
-                  -> summarize -> optional export
+    load -> validate material -> persist material
+         -> map optics -> validate optical -> persist optical
+         -> summarize -> optional export
 
 driven from a :class:`~vbdmat.pipeline.config.PipelineConfig`. The canonical bundle is
 built inside a sibling temporary directory and published by a single atomic directory
@@ -39,17 +39,15 @@ from vbdmat.core import (
     OpticalPropertyVolume,
     Provenance,
 )
-from vbdmat.io.mesh import read_stl
 from vbdmat.io.voxel_manifest import (
     inspect_material_label_manifest,
     read_material_label_manifest,
 )
 from vbdmat.io.zarr import read_volume, write_volume
 from vbdmat.optics import map_material_volume_to_optical
-from vbdmat.voxelize import voxelize_mesh
 
 from . import artifacts
-from .config import ExportTarget, InputKind, PipelineConfig
+from .config import ExportTarget, PipelineConfig
 from .errors import PipelineRunError
 
 #: Canonical bundle-relative artifact names (ADR-007 D4).
@@ -127,12 +125,11 @@ def run_pipeline(
     mapping_digest = config.mapping_digest
     timestamp = (created_utc or datetime.now(UTC)).isoformat()
 
-    first_stage = "voxelize" if config.input_kind is InputKind.MESH else "load"
-    stage = first_stage
+    stage = "load"
     temporary: Path | None = None
     try:
-        # -- load / voxelize -------------------------------------------------------
-        material, input_payload_sha256, copy_source = _load(config, input_path)
+        # -- load --------------------------------------------------------------
+        material, input_payload_sha256, copy_source = _load(input_path)
         material = _restamp(
             material, config_digest, (f"input-payload:{input_payload_sha256}",)
         )
@@ -157,7 +154,7 @@ def run_pipeline(
         # the config_digest by construction.
         (temporary / CONFIG_NAME).write_text(config.canonical_json(), encoding="utf-8")
 
-        stage = first_stage
+        stage = "load"
         source_files = copy_source(temporary / SOURCE_DIR)
 
         stage = "persist-material"
@@ -195,7 +192,7 @@ def run_pipeline(
             encoding="utf-8",
         )
 
-        stages = _stage_records(first_stage, config, StageStatus.SKIPPED)
+        stages = _stage_records(config, StageStatus.SKIPPED)
         manifest = _build_manifest(
             temporary,
             config=config,
@@ -226,7 +223,6 @@ def run_pipeline(
         stages, manifest = _run_exports(
             output_path,
             config=config,
-            first_stage=first_stage,
             manifest=dict(manifest),
             export_runner=export_runner,
         )
@@ -244,21 +240,13 @@ def run_pipeline(
     )
 
 
-# -- load / voxelize ---------------------------------------------------------------
+# -- load ---------------------------------------------------------------------------
 
 
 def _load(
-    config: PipelineConfig, input_path: Path
-) -> tuple[MaterialLabelVolume, str, Callable[[Path], list[Path]]]:
-    """Return the material volume, input payload checksum, and a source copier."""
-    if config.input_kind is InputKind.DIRECT_VOXEL:
-        return _load_direct_voxel(input_path)
-    return _load_mesh(config, input_path)
-
-
-def _load_direct_voxel(
     input_path: Path,
 ) -> tuple[MaterialLabelVolume, str, Callable[[Path], list[Path]]]:
+    """Return the material volume, input payload checksum, and a source copier."""
     inspection = inspect_material_label_manifest(input_path)
     payload_sha256 = f"sha256:{inspection.payload_sha256}"
     volume = read_material_label_manifest(input_path)
@@ -275,38 +263,6 @@ def _load_direct_voxel(
         return [manifest_dest, payload_dest]
 
     return volume, payload_sha256, copy_source
-
-
-def _load_mesh(
-    config: PipelineConfig, input_path: Path
-) -> tuple[MaterialLabelVolume, str, Callable[[Path], list[Path]]]:
-    settings = config.voxelization
-    if settings is None:  # pragma: no cover - guaranteed by PipelineConfig
-        raise PipelineRunError("voxelize", "mesh input requires voxelization settings")
-    payload_sha256 = artifacts.sha256_file(input_path)
-    mesh = read_stl(input_path)
-    result = voxelize_mesh(
-        mesh,
-        source_unit=settings.source_unit,
-        voxel_size_xyz_m=settings.voxel_size_xyz_m,
-        material_id=settings.material_id,
-        material_name=settings.material_name,
-        placement=settings.placement,
-        padding_cells=settings.padding_cells,
-    )
-
-    def copy_source(source_dir: Path) -> list[Path]:
-        source_dir.mkdir(parents=True)
-        mesh_dest = source_dir / input_path.name
-        shutil.copyfile(input_path, mesh_dest)
-        settings_dest = source_dir / "voxelization.json"
-        settings_dest.write_text(
-            json.dumps(settings.to_json_dict(), indent=2, sort_keys=True) + "\n",
-            encoding="utf-8",
-        )
-        return [mesh_dest, settings_dest]
-
-    return result.volume, payload_sha256, copy_source
 
 
 def _restamp(volume: Any, config_digest: str, extra_sources: tuple[str, ...]) -> Any:
@@ -359,7 +315,6 @@ def _run_id(config_digest: str, input_payload_sha256: str, mapping_digest: str) 
 
 
 def _stage_records(
-    first_stage: str,
     config: PipelineConfig,
     export_status: StageStatus,
 ) -> tuple[StageRecord, ...]:
@@ -367,7 +322,7 @@ def _stage_records(
         return StageStatus.OK if enabled else StageStatus.SKIPPED
 
     return (
-        StageRecord(first_stage, StageStatus.OK),
+        StageRecord("load", StageStatus.OK),
         StageRecord("validate-material", flag(config.validate_material)),
         StageRecord("persist-material", StageStatus.OK),
         StageRecord("map-optics", StageStatus.OK),
@@ -403,8 +358,6 @@ def _build_manifest(
         "optical": {"configuration_digest": config_digest},
         "config_digest": config_digest,
     }
-    if config.voxelization is not None:
-        provenance["voxelization"] = config.voxelization.to_json_dict()
 
     return {
         "schema": {
@@ -429,7 +382,7 @@ def _build_manifest(
 
 
 _ASSET_SCHEMAS = {
-    CONFIG_NAME: "vbdmat.pipeline-config/1.0.0",
+    CONFIG_NAME: "vbdmat.pipeline-config/2.0.0",
     MATERIAL_ZARR: "vbdmat.volume/1.0.0",
     OPTICAL_ZARR: "vbdmat.volume/1.0.0",
     SUMMARY_NAME: "vbdmat.summary/1.0.0",
@@ -496,7 +449,6 @@ def _run_exports(
     output_path: Path,
     *,
     config: PipelineConfig,
-    first_stage: str,
     manifest: dict[str, Any],
     export_runner: ExportRunner | None,
 ) -> tuple[tuple[StageRecord, ...], dict[str, Any]]:
@@ -534,7 +486,7 @@ def _run_exports(
             if item.is_file()
         )
 
-    stages = _stage_records(first_stage, config, status)
+    stages = _stage_records(config, status)
     manifest["stages"] = [
         {"name": item.name, "status": item.status.value} for item in stages
     ]

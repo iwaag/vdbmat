@@ -1,9 +1,10 @@
 """Tests for the committed Phase 1 representative input fixtures (plan Step 4).
 
-These assert the committed fixtures regenerate byte-identically, that both input
-paths produce valid canonical material volumes, and that reader/voxelizer output
-matches the *committed analytic summaries* — which are computed from the fixture
-definition, independent of the reader and voxelizer under test.
+These assert the committed fixtures regenerate byte-identically, that both
+fixture objects produce valid canonical material volumes through the direct-voxel
+contract, and that reader output matches the *committed analytic summaries* —
+which are computed from the fixture definition, independent of the reader under
+test.
 """
 
 from __future__ import annotations
@@ -18,14 +19,13 @@ from vbdmat.core import MaterialLabelVolume, MaterialRole
 from vbdmat.fixtures import (
     COUPON_MANIFEST_NAME,
     COUPON_PAYLOAD_NAME,
-    WEDGE_MESH_NAME,
-    stepped_wedge_summary,
+    WEDGE_MANIFEST_NAME,
+    WEDGE_PAYLOAD_NAME,
     window_coupon_label,
     write_phase1_fixtures,
 )
-from vbdmat.io import read_material_label_manifest, read_stl
+from vbdmat.io import read_material_label_manifest
 from vbdmat.io.errors import VoxelManifestError
-from vbdmat.voxelize import MeshTopologyError, voxelize_mesh
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _INPUTS = _REPO_ROOT / "examples" / "phase1" / "inputs"
@@ -45,7 +45,8 @@ def test_committed_inputs_exist() -> None:
         COUPON_PAYLOAD_NAME,
         COUPON_MANIFEST_NAME,
         "window_coupon.expected.json",
-        WEDGE_MESH_NAME,
+        WEDGE_MANIFEST_NAME,
+        WEDGE_PAYLOAD_NAME,
         "stepped_wedge.expected.json",
     ):
         assert (_INPUTS / name).is_file(), name
@@ -105,40 +106,31 @@ def test_coupon_features_are_axis_asymmetric() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# Mesh stepped wedge: valid canonical volume matching the analytic summary
+# Stepped wedge: valid canonical volume matching the analytic summary
 # --------------------------------------------------------------------------- #
 
 
-def test_wedge_voxelizes_to_valid_canonical_volume() -> None:
-    summary = stepped_wedge_summary()
-    mesh = read_stl(_INPUTS / WEDGE_MESH_NAME)
-    result = voxelize_mesh(
-        mesh,
-        source_unit=summary.source_unit,
-        voxel_size_xyz_m=summary.voxel_size_xyz_m,
-        material_id=summary.material_id,
-        material_name="wedge",
-    )
-    assert isinstance(result.volume, MaterialLabelVolume)
+def test_wedge_imports_to_valid_canonical_volume() -> None:
+    volume = read_material_label_manifest(_INPUTS / WEDGE_MANIFEST_NAME)
+    assert isinstance(volume, MaterialLabelVolume)  # validated on construction
+    assert volume.palette.by_id(0).role is MaterialRole.BACKGROUND
 
 
 def test_wedge_matches_committed_summary() -> None:
     expected = _committed_summary("stepped_wedge.expected.json")
-    mesh = read_stl(_INPUTS / WEDGE_MESH_NAME)
-    result = voxelize_mesh(
-        mesh,
-        source_unit=expected["source_unit"],
-        voxel_size_xyz_m=tuple(expected["voxel_size_xyz_m"]),
-        material_id=expected["material_id"],
+    volume = read_material_label_manifest(_INPUTS / WEDGE_MANIFEST_NAME)
+    label = np.asarray(volume.material_id)
+
+    assert list(volume.geometry.shape_zyx) == expected["shape_zyx"]
+    assert list(volume.geometry.voxel_size_xyz_m) == expected["voxel_size_xyz_m"]
+    translation = [row[3] for row in volume.geometry.local_to_world[:3]]
+    assert translation == pytest.approx(
+        expected["local_to_world_translation_m"]
     )
-    diag = result.diagnostics
-    assert list(diag.shape_zyx) == expected["shape_zyx"]
-    assert diag.occupied_cells == expected["occupied_cells"]
-    assert diag.triangle_count == expected["triangle_count"]
-    assert diag.bounds_max_xyz_m == pytest.approx(expected["bounds_max_xyz_m"])
+    assert int(np.count_nonzero(label)) == expected["occupied_cells"]
+    assert f"sha256:{expected['payload_sha256']}" in volume.provenance.sources
 
     # Per-step occupancy along X (padded interior index 1..16, 4 cells per step).
-    label = np.asarray(result.volume.material_id)
     for step, count in expected["per_step_occupied"].items():
         k = int(step)
         xs = slice(1 + (k - 1) * 4, 1 + k * 4)
@@ -155,15 +147,3 @@ def test_invalid_coupon_checksum_is_rejected() -> None:
     with pytest.raises(VoxelManifestError) as info:
         read_material_label_manifest(bad)
     assert info.value.field_path == "payload.sha256"
-
-
-def test_invalid_open_wedge_is_rejected() -> None:
-    mesh = read_stl(_INPUTS / "invalid" / "stepped_wedge.open.stl")
-    with pytest.raises(MeshTopologyError) as info:
-        voxelize_mesh(
-            mesh,
-            source_unit="mm",
-            voxel_size_xyz_m=(0.001, 0.001, 0.001),
-            material_id=1,
-        )
-    assert "open" in str(info.value).lower()

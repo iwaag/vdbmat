@@ -60,23 +60,17 @@ def test_import_json_paths_with_spaces_and_api_equivalence(
     assert zarr_store_sha256(output) == zarr_store_sha256(expected)
 
 
-def test_voxelize_convert_inspect_and_validate(inputs: Path, tmp_path: Path) -> None:
+def test_import_convert_inspect_and_validate(inputs: Path, tmp_path: Path) -> None:
     material = tmp_path / "wedge.zarr"
     optical = tmp_path / "optical.zarr"
-    voxelized = _run(
-        "voxelize",
-        inputs / "stepped_wedge.stl",
+    imported = _run(
+        "import-voxels",
+        inputs / "stepped_wedge.voxels.json",
         material,
-        "--unit",
-        "mm",
-        "--voxel-size",
-        "0.001",
-        "--material-id",
-        "1",
         "--json",
     )
-    assert voxelized.returncode == 0
-    assert _json(voxelized)["diagnostics"]["occupied_cells"] == 480
+    assert imported.returncode == 0
+    assert _json(imported)["asset_type"] == "material-label"
 
     converted = _run("convert", material, optical, "--json")
     assert converted.returncode == 0
@@ -135,18 +129,12 @@ def test_overwrite_requires_authorization(inputs: Path, tmp_path: Path) -> None:
 
 
 def test_documented_exit_categories(inputs: Path, tmp_path: Path) -> None:
-    usage = _run("voxelize", inputs / "stepped_wedge.stl", tmp_path / "out.zarr")
-    validation = _run(
-        "voxelize",
-        Path("examples/phase1/inputs/invalid/stepped_wedge.open.stl").resolve(),
-        tmp_path / "open.zarr",
-        "--unit",
-        "mm",
-        "--voxel-size",
-        "0.001",
-        "--material-id",
-        "1",
+    usage = _run("import-voxels", inputs / "window_coupon.voxels.json")
+    bad_manifest = tmp_path / "bad.voxels.json"
+    bad_manifest.write_text(
+        json.dumps({"format": "not-vbdmat"}), encoding="utf-8"
     )
+    validation = _run("import-voxels", bad_manifest, tmp_path / "bad-out.zarr")
     io_error = _run(
         "import-voxels",
         Path(
@@ -186,20 +174,19 @@ def test_error_json_is_parseable_and_diagnostics_stay_on_stderr(
     assert document["exit_code"] == 4
     assert "file not found" in result.stderr
 
-    usage = _run("voxelize", "mesh.stl", "out.zarr", "--json")
+    usage = _run("import-voxels", "manifest.json", "--json")
     assert usage.returncode == 2
     assert _json(usage)["exit_code"] == 2
 
 
 def test_help_documents_contract_and_console_entry_point() -> None:
     top = _run("--help")
-    voxelize = _run("voxelize", "--help")
     convert = _run("convert", "--help")
 
     assert top.returncode == 0
     assert "provisional and uncalibrated" in top.stdout
     assert "physical print predictions" in top.stdout
-    assert "explicit STL unit" in voxelize.stdout
-    assert "default: 1" in voxelize.stdout
+    assert "voxelize" not in top.stdout  # removed from the core CLI (ADR-009)
+    assert "vbdmat.voxels manifest" in top.stdout
     assert "provisional" in convert.stdout
     assert "uncalibrated" in convert.stdout

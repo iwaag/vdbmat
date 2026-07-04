@@ -1,4 +1,4 @@
-"""Tests for the versioned Phase 1 pipeline configuration (plan Step 5)."""
+"""Tests for the versioned Phase 1 pipeline configuration (plan Step 5, ADR-009)."""
 
 import json
 import re
@@ -14,7 +14,6 @@ from vbdmat.pipeline import (
     ExportSettings,
     ExportTarget,
     InputKind,
-    MeshVoxelizationSettings,
     PipelineConfig,
     PipelineConfigError,
     RendererConfig,
@@ -31,27 +30,6 @@ def direct_config(**overrides: object) -> PipelineConfig:
     return PipelineConfig(**base)  # type: ignore[arg-type]
 
 
-def mesh_settings(**overrides: object) -> MeshVoxelizationSettings:
-    base = {
-        "source_unit": "mm",
-        "voxel_size_xyz_m": (0.001, 0.001, 0.001),
-        "material_id": 1,
-    }
-    base.update(overrides)
-    return MeshVoxelizationSettings(**base)  # type: ignore[arg-type]
-
-
-def mesh_config(**overrides: object) -> PipelineConfig:
-    base = {
-        "input_kind": InputKind.MESH,
-        "input_path": "inputs/stepped_wedge.stl",
-        "output_path": "runs/stepped_wedge",
-        "voxelization": mesh_settings(),
-    }
-    base.update(overrides)
-    return PipelineConfig(**base)  # type: ignore[arg-type]
-
-
 # -- Construction and immutability ------------------------------------------------
 
 
@@ -60,7 +38,6 @@ def test_direct_config_defaults_are_explicit() -> None:
 
     assert config.input_kind is InputKind.DIRECT_VOXEL
     assert config.mapping_name == DEFAULT_MAPPING_NAME
-    assert config.voxelization is None
     assert config.overwrite is False
     assert config.random_seed == 0
     assert config.exports == ()
@@ -83,14 +60,14 @@ def test_mapping_resolves_to_phase0_and_reports_digest() -> None:
 
 
 def test_equivalent_configurations_hash_identically() -> None:
-    a = mesh_config()
-    b = mesh_config(voxelization=mesh_settings())
+    a = direct_config()
+    b = direct_config()
     assert a.digest == b.digest
     assert a.canonical_json() == b.canonical_json()
 
 
 def test_json_roundtrip_hashes_identically() -> None:
-    config = mesh_config(exports=(ExportSettings(ExportTarget.MITSUBA),))
+    config = direct_config(exports=(ExportSettings(ExportTarget.MITSUBA),))
     restored = PipelineConfig.from_json(config.canonical_json())
     assert restored.digest == config.digest
 
@@ -111,18 +88,12 @@ def test_meaningful_changes_alter_the_digest(changed: dict[str, object]) -> None
     assert direct_config().digest != direct_config(**changed).digest
 
 
-def test_voxelization_change_alters_the_digest() -> None:
-    a = mesh_config()
-    b = mesh_config(voxelization=mesh_settings(voxel_size_xyz_m=(0.002, 0.001, 0.001)))
-    assert a.digest != b.digest
-
-
 # -- Renderer/export independence of canonical results ----------------------------
 
 
 def test_renderer_and_exports_do_not_change_scientific_digest() -> None:
-    plain = mesh_config()
-    with_renderer = mesh_config(
+    plain = direct_config()
+    with_renderer = direct_config(
         exports=(ExportSettings(ExportTarget.MITSUBA),),
         renderer=RendererConfig(references=("scenes/wedge.xml",)),
     )
@@ -137,25 +108,19 @@ def test_scientific_digest_ignores_input_path_and_output() -> None:
     assert a.scientific_digest == b.scientific_digest
 
 
-def test_scientific_digest_tracks_mapping_and_voxelization() -> None:
-    a = mesh_config()
-    b = mesh_config(voxelization=mesh_settings(material_id=2))
+def test_scientific_digest_tracks_validation_and_seed() -> None:
+    a = direct_config()
+    b = direct_config(validate_material=False)
     assert a.scientific_digest != b.scientific_digest
+    assert a.scientific_digest != direct_config(random_seed=11).scientific_digest
 
 
 # -- Round-trip fidelity ----------------------------------------------------------
 
 
 def test_roundtrip_preserves_every_declared_setting() -> None:
-    config = mesh_config(
+    config = direct_config(
         mapping_name=DEFAULT_MAPPING_NAME,
-        voxelization=mesh_settings(
-            source_unit="m",
-            voxel_size_xyz_m=(0.0005, 0.0004, 0.0003),
-            material_id=3,
-            material_name="black",
-            padding_cells=2,
-        ),
         validate_material=False,
         validate_optical=True,
         exports=(
@@ -176,6 +141,7 @@ def test_recorded_schema_and_mapping_digest() -> None:
         "name": PIPELINE_CONFIG_SCHEMA.name,
         "version": str(PIPELINE_CONFIG_SCHEMA.version),
     }
+    assert document["schema"]["version"] == "2.0.0"
     assert document["mapping"]["digest"] == phase0_provisional_mapping().digest
 
 
@@ -187,20 +153,6 @@ def test_canonical_json_is_sorted_and_tight() -> None:
 # -- Invalid combinations fail before any output ----------------------------------
 
 
-def test_mesh_requires_explicit_voxelization() -> None:
-    with pytest.raises(PipelineConfigError, match=re.escape("input.voxelization")):
-        PipelineConfig(
-            input_kind=InputKind.MESH,
-            input_path="m.stl",
-            output_path="runs/m",
-        )
-
-
-def test_direct_voxel_forbids_voxelization() -> None:
-    with pytest.raises(PipelineConfigError, match=re.escape("input.voxelization")):
-        direct_config(voxelization=mesh_settings())
-
-
 def test_unknown_mapping_name_fails() -> None:
     with pytest.raises(PipelineConfigError, match=re.escape("mapping.name")):
         direct_config(mapping_name="does-not-exist")
@@ -209,9 +161,9 @@ def test_unknown_mapping_name_fails() -> None:
 def test_unsupported_input_kind_fails() -> None:
     with pytest.raises(PipelineConfigError, match=re.escape("input.kind")):
         PipelineConfig(
-            input_kind="printer-native",  # type: ignore[arg-type]
-            input_path="x",
-            output_path="y",
+            input_kind="mesh",  # type: ignore[arg-type]
+            input_path="m.stl",
+            output_path="runs/m",
         )
 
 
@@ -232,49 +184,19 @@ def test_duplicate_export_targets_fail() -> None:
         )
 
 
-@pytest.mark.parametrize(
-    "changed, field_path",
-    [
-        ({"source_unit": "cm"}, "source_unit"),
-        ({"voxel_size_xyz_m": (0.001, 0.001)}, "voxel_size_xyz_m"),
-        ({"voxel_size_xyz_m": (0.0, 0.001, 0.001)}, "voxel_size_xyz_m.x"),
-        ({"voxel_size_xyz_m": (float("inf"), 1.0, 1.0)}, "voxel_size_xyz_m.x"),
-        ({"material_id": 0}, "material_id"),
-        ({"material_id": 70000}, "material_id"),
-        ({"padding_cells": -1}, "padding_cells"),
-    ],
-)
-def test_invalid_mesh_settings_fail(
-    changed: dict[str, object], field_path: str
-) -> None:
-    with pytest.raises(PipelineConfigError, match=re.escape(field_path)):
-        mesh_settings(**changed)
-
-
-def test_non_rigid_placement_fails() -> None:
-    scaled = (
-        (2.0, 0.0, 0.0, 0.0),
-        (0.0, 1.0, 0.0, 0.0),
-        (0.0, 0.0, 1.0, 0.0),
-        (0.0, 0.0, 0.0, 1.0),
-    )
-    with pytest.raises(PipelineConfigError, match="placement"):
-        mesh_settings(placement=scaled)
-
-
 # -- Deserialization guards -------------------------------------------------------
 
 
 def test_incompatible_major_schema_rejected() -> None:
     document = direct_config().to_json_dict()
-    document["schema"]["version"] = "2.0.0"
+    document["schema"]["version"] = "1.0.0"
     with pytest.raises(PipelineConfigError, match="incompatible major version"):
         PipelineConfig.from_json_dict(document)
 
 
 def test_compatible_minor_schema_accepted() -> None:
     document = direct_config().to_json_dict()
-    document["schema"]["version"] = "1.5.0"
+    document["schema"]["version"] = "2.5.0"
     restored = PipelineConfig.from_json_dict(document)
     assert restored.digest == direct_config().digest
 
@@ -286,9 +208,10 @@ def test_unknown_top_level_key_rejected() -> None:
         PipelineConfig.from_json_dict(document)
 
 
-def test_unknown_nested_key_rejected() -> None:
-    document = mesh_config().to_json_dict()
-    document["input"]["voxelization"]["extra"] = 1
+def test_v1_mesh_input_document_is_rejected() -> None:
+    # Removed mesh path (ADR-009 D1): a v1-style voxelization block is an unknown key.
+    document = direct_config().to_json_dict()
+    document["input"]["voxelization"] = {"source_unit": "mm"}
     with pytest.raises(PipelineConfigError, match="unknown keys"):
         PipelineConfig.from_json_dict(document)
 
@@ -335,15 +258,12 @@ EXAMPLE_CONFIGS = (
 
 
 @pytest.mark.parametrize(
-    "name, kind",
-    [
-        ("window_coupon.run.json", InputKind.DIRECT_VOXEL),
-        ("stepped_wedge.run.json", InputKind.MESH),
-    ],
+    "name",
+    ["window_coupon.run.json", "stepped_wedge.run.json"],
 )
-def test_committed_example_configs_parse(name: str, kind: InputKind) -> None:
+def test_committed_example_configs_parse(name: str) -> None:
     text = (EXAMPLE_CONFIGS / name).read_text(encoding="utf-8")
     config = PipelineConfig.from_json(text)
-    assert config.input_kind is kind
+    assert config.input_kind is InputKind.DIRECT_VOXEL
     # Re-serializing and re-parsing is stable (the committed file is a valid config).
     assert PipelineConfig.from_json(config.canonical_json()).digest == config.digest

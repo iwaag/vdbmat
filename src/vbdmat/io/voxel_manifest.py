@@ -135,6 +135,84 @@ def read_material_label_manifest(path: str | Path) -> MaterialLabelVolume:
     )
 
 
+def write_material_label_manifest(
+    directory: str | Path,
+    name: str,
+    volume: MaterialLabelVolume,
+    *,
+    identity: str | None = None,
+) -> Path:
+    """Write a canonical volume as a ``vbdmat.voxels`` manifest plus payload.
+
+    This is the shared emitter for external input generators (ADR-009 D2): the
+    payload is written as ``<name>.material_id.npy`` and the manifest as
+    ``<name>.voxels.json`` under ``directory``, with the payload SHA-256 recorded
+    in the manifest. Generator identity comes from the volume's provenance;
+    ``identity`` optionally records the source-data identity. Output of this
+    writer round-trips through :func:`read_material_label_manifest`.
+    """
+    if not isinstance(volume, MaterialLabelVolume):
+        raise VoxelManifestError("volume", "must be a MaterialLabelVolume")
+    if not name or "/" in name or "\\" in name:
+        raise VoxelManifestError("name", "must be a non-empty single path component")
+    if identity is not None and (not isinstance(identity, str) or not identity.strip()):
+        raise VoxelManifestError("source.identity", "must be a non-empty string")
+
+    base = Path(directory)
+    base.mkdir(parents=True, exist_ok=True)
+    payload_name = f"{name}.material_id.npy"
+
+    buffer = io.BytesIO()
+    np.save(buffer, np.asarray(volume.material_id, dtype=np.uint16))
+    payload_bytes = buffer.getvalue()
+    payload_sha = hashlib.sha256(payload_bytes).hexdigest()
+    (base / payload_name).write_bytes(payload_bytes)
+
+    materials: list[dict[str, Any]] = []
+    for definition in volume.palette:
+        entry: dict[str, Any] = {
+            "material_id": definition.material_id,
+            "name": definition.name,
+            "role": definition.role.value,
+        }
+        if definition.external_id is not None:
+            entry["external_id"] = definition.external_id
+        if definition.metadata:
+            entry["metadata"] = dict(definition.metadata)
+        materials.append(entry)
+
+    source: dict[str, Any] = {
+        "generator": volume.provenance.generator,
+        "generator_version": volume.provenance.generator_version,
+    }
+    if identity is not None:
+        source["identity"] = identity
+    if volume.provenance.notes is not None:
+        source["notes"] = volume.provenance.notes
+
+    manifest = {
+        "format": FORMAT_NAME,
+        "format_version": "1.0.0",
+        "asset_type": ASSET_TYPE,
+        "payload": {
+            "path": payload_name,
+            "sha256": payload_sha,
+            "dtype": "uint16",
+            "dimensions": ["z", "y", "x"],
+        },
+        "shape_zyx": list(volume.geometry.shape_zyx),
+        "voxel_size_xyz_m": list(volume.geometry.voxel_size_xyz_m),
+        "local_to_world": [list(row) for row in volume.geometry.local_to_world],
+        "materials": materials,
+        "source": source,
+    }
+    manifest_path = base / f"{name}.voxels.json"
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
+    )
+    return manifest_path
+
+
 def _load_manifest(path: str | Path) -> tuple[Mapping[str, Any], Path]:
     manifest_path = Path(path)
     try:

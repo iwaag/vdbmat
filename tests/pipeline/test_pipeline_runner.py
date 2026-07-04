@@ -1,6 +1,6 @@
 """Step 6 pipeline orchestration and run-bundle tests (ADR-007 compliance).
 
-These exercise the full canonical stage sequence for both supported inputs, the
+These exercise the full canonical stage sequence for the direct-voxel input, the
 failure-safe atomic publication, provenance chaining, deterministic reruns, and the
 failure-isolated optional export stage. Fixtures are materialized from the deterministic
 Phase 1 generators so the tests do not depend on the committed example bundle.
@@ -21,7 +21,6 @@ from vbdmat.io.zarr import read_volume
 from vbdmat.pipeline import (
     ExportSettings,
     ExportTarget,
-    MeshVoxelizationSettings,
     PipelineConfig,
     PipelineRunError,
     StageStatus,
@@ -58,15 +57,9 @@ def _coupon_config(inputs_dir: Path, output: str, **overrides: Any) -> PipelineC
 
 def _wedge_config(inputs_dir: Path, output: str, **overrides: Any) -> PipelineConfig:
     return PipelineConfig(
-        input_kind="mesh",
-        input_path="stepped_wedge.stl",
+        input_kind="direct-voxel",
+        input_path="stepped_wedge.voxels.json",
         output_path=output,
-        voxelization=MeshVoxelizationSettings(
-            source_unit="mm",
-            voxel_size_xyz_m=(0.001, 0.001, 0.001),
-            material_id=1,
-            material_name="transparent-resin",
-        ),
         **overrides,
     )
 
@@ -92,14 +85,14 @@ def test_direct_voxel_completes_the_canonical_stage_sequence(inputs_dir: Path) -
     assert result.stages[-1].status is StageStatus.SKIPPED
 
 
-def test_mesh_completes_the_same_sequence_starting_with_voxelize(
+def test_wedge_manifest_completes_the_same_sequence(
     inputs_dir: Path,
 ) -> None:
     config = _wedge_config(inputs_dir, "out/wedge")
     result = run_pipeline(config, base_dir=str(inputs_dir))
 
     names = tuple(stage.name for stage in result.stages)
-    assert names == ("voxelize", *CANONICAL_STAGES)
+    assert names == ("load", *CANONICAL_STAGES)
 
 
 def test_bundle_layout_matches_adr_007(inputs_dir: Path) -> None:
@@ -172,12 +165,15 @@ def test_provenance_links_input_mapping_and_config(inputs_dir: Path) -> None:
     assert provenance["config_digest"] == result.config_digest
 
 
-def test_mesh_provenance_records_voxelization(inputs_dir: Path) -> None:
+def test_wedge_provenance_records_generator_identity(inputs_dir: Path) -> None:
     config = _wedge_config(inputs_dir, "out/wedge")
     result = run_pipeline(config, base_dir=str(inputs_dir))
-    voxelization = result.manifest["provenance"]["voxelization"]
-    assert voxelization["source_unit"] == "mm"
-    assert voxelization["material_id"] == 1
+    bundle = result.output_path
+    material = read_volume(bundle / "material.zarr")
+    assert material.provenance.generator == "vbdmat.fixtures.phase1"
+    assert any(
+        source.startswith("identity:") for source in material.provenance.sources
+    )
 
 
 # -- run identifier ----------------------------------------------------------------

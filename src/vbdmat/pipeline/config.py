@@ -1,10 +1,13 @@
-"""Immutable, digestible Phase 1 pipeline configuration (ADR-007 / ADR-008).
+"""Immutable, digestible Phase 1 pipeline configuration (ADR-007 / ADR-008 / ADR-009).
 
 The configuration is the single, portable declaration of *what* a pipeline run does:
-which input to read, how to voxelize a mesh, which optical mapping to apply, which
-validation and export stages to run, and where to publish the run bundle. It is a
-pure data object — building it performs no I/O and creates no output — so an invalid
-combination fails before anything is written (plan Step 5).
+which voxel manifest to read, which optical mapping to apply, which validation and
+export stages to run, and where to publish the run bundle. It is a pure data object —
+building it performs no I/O and creates no output — so an invalid combination fails
+before anything is written (plan Step 5).
+
+Per ADR-009 D1, the only supported input is the ``vbdmat.voxels`` direct-voxel
+manifest; the core owns no geometry-to-voxel conversion.
 
 Two canonicalizations are exposed:
 
@@ -18,27 +21,20 @@ Two canonicalizations are exposed:
 
 import hashlib
 import json
-import math
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from enum import StrEnum
-from numbers import Integral, Real
+from numbers import Integral
 from pathlib import Path
 from typing import Any
 
 from vbdmat.core import SchemaIdentity, SchemaVersion
-from vbdmat.core.transforms import (
-    IDENTITY_MATRIX_4,
-    Matrix4,
-    normalize_rigid_transform,
-)
 from vbdmat.optics import OpticalMappingConfig, phase0_provisional_mapping
-from vbdmat.voxelize import SUPPORTED_MESH_UNITS
 
 from .errors import PipelineConfigError
 
 PIPELINE_CONFIG_SCHEMA = SchemaIdentity(
-    name="vbdmat.pipeline-config", version=SchemaVersion(1, 0, 0)
+    name="vbdmat.pipeline-config", version=SchemaVersion(2, 0, 0)
 )
 
 #: Builtin optical mappings referenced by name from a configuration.
@@ -50,10 +46,14 @@ DEFAULT_MAPPING_NAME = "phase0-provisional-materials-v1"
 
 
 class InputKind(StrEnum):
-    """The two Phase 1 input paths (ADR-006)."""
+    """The single supported input path (ADR-009 D1).
+
+    The enum is retained as the explicit extension point should a second stable
+    input contract ever be adopted; external generators emit voxel manifests
+    rather than adding members here.
+    """
 
     DIRECT_VOXEL = "direct-voxel"
-    MESH = "mesh"
 
 
 class ExportTarget(StrEnum):
@@ -61,113 +61,6 @@ class ExportTarget(StrEnum):
 
     MITSUBA = "mitsuba"
     OPENVDB = "openvdb"
-
-
-@dataclass(frozen=True, slots=True)
-class MeshVoxelizationSettings:
-    """Explicit mesh voxelization settings required for the mesh input path.
-
-    STL carries neither units nor material identity, so every value here is explicit;
-    there is no inferred unit or material default (plan Step 5, ADR-006).
-    """
-
-    source_unit: str
-    voxel_size_xyz_m: tuple[float, float, float]
-    material_id: int
-    material_name: str = "material"
-    placement: Matrix4 = IDENTITY_MATRIX_4
-    padding_cells: int = 1
-
-    def __post_init__(self) -> None:
-        if self.source_unit not in SUPPORTED_MESH_UNITS:
-            raise PipelineConfigError(
-                "input.voxelization.source_unit",
-                f"must be one of {list(SUPPORTED_MESH_UNITS)}, got "
-                f"{self.source_unit!r}",
-            )
-
-        voxel_size = _normalize_voxel_size(self.voxel_size_xyz_m)
-        object.__setattr__(self, "voxel_size_xyz_m", voxel_size)
-
-        if isinstance(self.material_id, bool) or not isinstance(
-            self.material_id, Integral
-        ):
-            raise PipelineConfigError(
-                "input.voxelization.material_id", "must be an integer"
-            )
-        material_id = int(self.material_id)
-        if not 1 <= material_id <= 65535:
-            raise PipelineConfigError(
-                "input.voxelization.material_id",
-                "must be a non-background material ID in [1, 65535]",
-            )
-        object.__setattr__(self, "material_id", material_id)
-
-        if not isinstance(self.material_name, str) or not self.material_name.strip():
-            raise PipelineConfigError(
-                "input.voxelization.material_name", "must be a non-empty string"
-            )
-
-        try:
-            placement = normalize_rigid_transform(self.placement)
-        except (TypeError, ValueError) as error:
-            raise PipelineConfigError(
-                "input.voxelization.placement", str(error)
-            ) from error
-        object.__setattr__(self, "placement", placement)
-
-        if isinstance(self.padding_cells, bool) or not isinstance(
-            self.padding_cells, Integral
-        ):
-            raise PipelineConfigError(
-                "input.voxelization.padding_cells", "must be an integer"
-            )
-        padding = int(self.padding_cells)
-        if padding < 0:
-            raise PipelineConfigError(
-                "input.voxelization.padding_cells", "must be non-negative"
-            )
-        object.__setattr__(self, "padding_cells", padding)
-
-    def to_json_dict(self) -> dict[str, Any]:
-        """Return the portable JSON form of these settings."""
-        return {
-            "source_unit": self.source_unit,
-            "voxel_size_xyz_m": list(self.voxel_size_xyz_m),
-            "material_id": self.material_id,
-            "material_name": self.material_name,
-            "placement": [list(row) for row in self.placement],
-            "padding_cells": self.padding_cells,
-        }
-
-    @classmethod
-    def from_json_dict(cls, data: Mapping[str, Any]) -> "MeshVoxelizationSettings":
-        """Reconstruct settings from their portable JSON form."""
-        _require_mapping("input.voxelization", data)
-        _reject_unknown_keys(
-            "input.voxelization",
-            data,
-            {
-                "source_unit",
-                "voxel_size_xyz_m",
-                "material_id",
-                "material_name",
-                "placement",
-                "padding_cells",
-            },
-        )
-        _require_key("input.voxelization", data, "source_unit")
-        _require_key("input.voxelization", data, "voxel_size_xyz_m")
-        _require_key("input.voxelization", data, "material_id")
-        placement = data.get("placement", IDENTITY_MATRIX_4)
-        return cls(
-            source_unit=data["source_unit"],
-            voxel_size_xyz_m=tuple(data["voxel_size_xyz_m"]),
-            material_id=data["material_id"],
-            material_name=data.get("material_name", "material"),
-            placement=placement,
-            padding_cells=data.get("padding_cells", 1),
-        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -254,7 +147,6 @@ class PipelineConfig:
     input_path: str
     output_path: str
     mapping_name: str = DEFAULT_MAPPING_NAME
-    voxelization: MeshVoxelizationSettings | None = None
     validate_material: bool = True
     validate_optical: bool = True
     exports: tuple[ExportSettings, ...] = ()
@@ -283,26 +175,6 @@ class PipelineConfig:
                 "mapping.name",
                 f"unknown mapping; must be one of {sorted(_BUILTIN_MAPPINGS)}, got "
                 f"{self.mapping_name!r}",
-            )
-
-        # The mesh path requires explicit voxelization settings; the direct-voxel path
-        # takes units, transform and palette from the manifest and must not carry them.
-        if input_kind is InputKind.MESH:
-            if self.voxelization is None:
-                raise PipelineConfigError(
-                    "input.voxelization",
-                    "mesh input requires explicit voxelization settings",
-                )
-            if not isinstance(self.voxelization, MeshVoxelizationSettings):
-                raise PipelineConfigError(
-                    "input.voxelization",
-                    "must be a MeshVoxelizationSettings",
-                )
-        elif self.voxelization is not None:
-            raise PipelineConfigError(
-                "input.voxelization",
-                "direct-voxel input takes units and material from the manifest; "
-                "voxelization settings are not allowed",
             )
 
         for name in ("validate_material", "validate_optical", "overwrite"):
@@ -359,19 +231,15 @@ class PipelineConfig:
 
     def to_json_dict(self) -> dict[str, Any]:
         """Return the exact, portable JSON object recorded as ``config.json``."""
-        input_section: dict[str, Any] = {
-            "kind": self.input_kind.value,
-            "path": self.input_path,
-        }
-        if self.voxelization is not None:
-            input_section["voxelization"] = self.voxelization.to_json_dict()
-
         document: dict[str, Any] = {
             "schema": {
                 "name": PIPELINE_CONFIG_SCHEMA.name,
                 "version": str(PIPELINE_CONFIG_SCHEMA.version),
             },
-            "input": input_section,
+            "input": {
+                "kind": self.input_kind.value,
+                "path": self.input_path,
+            },
             "mapping": {"name": self.mapping_name, "digest": self.mapping_digest},
             "stages": {
                 "validate_material": self.validate_material,
@@ -403,11 +271,8 @@ class PipelineConfig:
         the input *path*, since canonical results depend on the input payload content
         (ADR-007 D3), not on where the input file lives.
         """
-        input_section: dict[str, Any] = {"kind": self.input_kind.value}
-        if self.voxelization is not None:
-            input_section["voxelization"] = self.voxelization.to_json_dict()
         payload = {
-            "input": input_section,
+            "input": {"kind": self.input_kind.value},
             "mapping": {"name": self.mapping_name, "digest": self.mapping_digest},
             "stages": {
                 "validate_material": self.validate_material,
@@ -438,14 +303,9 @@ class PipelineConfig:
         _check_schema(data)
 
         input_section = _require_mapping("input", data.get("input"))
-        _reject_unknown_keys("input", input_section, {"kind", "path", "voxelization"})
+        _reject_unknown_keys("input", input_section, {"kind", "path"})
         _require_key("input", input_section, "kind")
         _require_key("input", input_section, "path")
-        voxelization = None
-        if "voxelization" in input_section:
-            voxelization = MeshVoxelizationSettings.from_json_dict(
-                input_section["voxelization"]
-            )
 
         mapping_section = _require_mapping("mapping", data.get("mapping"))
         _reject_unknown_keys("mapping", mapping_section, {"name", "digest"})
@@ -481,7 +341,6 @@ class PipelineConfig:
             input_path=input_section["path"],
             output_path=output_section["path"],
             mapping_name=mapping_section["name"],
-            voxelization=voxelization,
             validate_material=stages_section.get("validate_material", True),
             validate_optical=stages_section.get("validate_optical", True),
             exports=exports,
@@ -511,32 +370,6 @@ def _canonical_dumps(payload: Mapping[str, Any]) -> str:
 
 def _sha256(text: str) -> str:
     return f"sha256:{hashlib.sha256(text.encode('utf-8')).hexdigest()}"
-
-
-def _normalize_voxel_size(value: Sequence[float]) -> tuple[float, float, float]:
-    values = tuple(value)
-    if len(values) != 3:
-        raise PipelineConfigError(
-            "input.voxelization.voxel_size_xyz_m", "must contain exactly 3 numbers"
-        )
-    result: list[float] = []
-    for axis, item in zip(("x", "y", "z"), values, strict=True):
-        if isinstance(item, bool) or not isinstance(item, Real):
-            raise PipelineConfigError(
-                f"input.voxelization.voxel_size_xyz_m.{axis}", "must be a number"
-            )
-        number = float(item)
-        if not math.isfinite(number):
-            raise PipelineConfigError(
-                f"input.voxelization.voxel_size_xyz_m.{axis}", "must be finite"
-            )
-        if number <= 0.0:
-            raise PipelineConfigError(
-                f"input.voxelization.voxel_size_xyz_m.{axis}",
-                "must be greater than zero",
-            )
-        result.append(number)
-    return (result[0], result[1], result[2])
 
 
 def _normalize_path(field_path: str, value: Any) -> str:

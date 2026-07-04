@@ -38,7 +38,6 @@ from vbdmat.fixtures import write_phase1_fixtures
 from vbdmat.io import read_volume
 from vbdmat.pipeline import (
     InputKind,
-    MeshVoxelizationSettings,
     PipelineConfig,
     run_pipeline,
     sha256_file,
@@ -65,15 +64,9 @@ def _configs() -> dict[str, PipelineConfig]:
             output_path="runs/window_coupon",
         ),
         "stepped_wedge": PipelineConfig(
-            input_kind=InputKind.MESH,
-            input_path="inputs/stepped_wedge.stl",
+            input_kind=InputKind.DIRECT_VOXEL,
+            input_path="inputs/stepped_wedge.voxels.json",
             output_path="runs/stepped_wedge",
-            voxelization=MeshVoxelizationSettings(
-                source_unit="mm",
-                voxel_size_xyz_m=(0.001, 0.001, 0.001),
-                material_id=1,
-                material_name="transparent-resin",
-            ),
         ),
     }
 
