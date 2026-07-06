@@ -125,8 +125,9 @@ Two conveniences for generator authors:
 - `vdbmat.io.write_material_label_manifest(directory, name, volume)` emits a
   conforming manifest + payload from a canonical volume, so you don't hand-roll
   the JSON.
-- `tools/image_stack_generator/generate.py` is a complete reference generator
-  (grayscale PGM slice stack → manifest).
+- `vdbmat-utils convert-image-stack` (in the companion `vdbmat-utils`
+  distribution) is a complete reference generator (grayscale PGM/PNG slice
+  stack → manifest); its `vdbmat_utils.image` package is the API form.
 
 ## 8. Further reading (if you need more detail)
 
