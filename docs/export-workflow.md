@@ -1,4 +1,4 @@
-# Phase 1 Optional Export Workflow
+# Optional Export Workflow
 
 Optional exports consume a canonical optical volume restored from `optical.zarr`.
 They do not participate in import, voxelization, optical mapping, validation, or
@@ -11,8 +11,8 @@ Install and invoke the locked optional group:
 ```bash
 uv sync --locked --group mitsuba
 uv run --group mitsuba vdbmat export mitsuba \
-  .local/phase1/window-coupon/optical.zarr \
-  .local/phase1/window-coupon/exports/mitsuba --json
+  .local/window-coupon/optical.zarr \
+  .local/window-coupon/exports/mitsuba --json
 ```
 
 The default command prepares a loadable scene, PLY domain/interface meshes,
@@ -25,15 +25,15 @@ the same lazy Mitsuba adapter; neither changes the source Zarr asset.
 OpenVDB is ABI-coupled and remains in the pinned native container:
 
 ```bash
-docker build -t vdbmat-openvdb-cycles \
-  -f tools/phase0/Dockerfile.openvdb-cycles .
+docker build -t vdbmat-openvdb-cycles:blender4.5.11 \
+  -f tools/Dockerfile.openvdb-cycles .
 
 docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp \
   -e PYTHONPATH=/work/src -v "$PWD:/work" -w /work \
-  vdbmat-openvdb-cycles \
+  vdbmat-openvdb-cycles:blender4.5.11 \
   python3 -m vdbmat.cli.main export openvdb \
-  .local/phase1/window-coupon/optical.zarr \
-  .local/phase1/window-coupon/exports/openvdb --json
+  .local/window-coupon/optical.zarr \
+  .local/window-coupon/exports/openvdb --json
 ```
 
 The image combines Ubuntu's NumPy 1.26/OpenVDB 10.0.1 ABI with Zarr 3.0.10. Newer
@@ -45,10 +45,10 @@ package dependency:
 
 ```bash
 docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp \
-  -v "$PWD:/work" -w /work vdbmat-openvdb-cycles \
+  -v "$PWD:/work" -w /work vdbmat-openvdb-cycles:blender4.5.11 \
   blender --background --python examples/phase0/blender_cycles_volume.py -- \
-  .local/phase1/window-coupon/exports/openvdb/openvdb-manifest.json \
-  .local/phase1/window-coupon/exports/openvdb/cycles.png
+  .local/window-coupon/exports/openvdb/openvdb-manifest.json \
+  .local/window-coupon/exports/openvdb/cycles.png
 ```
 
 ## Pipeline behavior and diagnostics

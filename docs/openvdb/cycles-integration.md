@@ -1,46 +1,38 @@
-# Phase 0 OpenVDB / Blender Cycles Consumer Proof
+# OpenVDB / Blender Cycles Consumer
 
-**Date:** 2026-06-29
-
-**Adapter:** `vdbmat.exporters.openvdb` 1.0.0
-
+**Adapter:** `vdbmat.exporters.openvdb`
 **OpenVDB:** 10.0.1 (`python3-openvdb`, module `pyopenvdb`)
-
 **Blender:** 4.5.11 LTS official Linux build, Cycles CPU
 
 ## Environment and reproduction
 
 The core project intentionally does not install OpenVDB or Blender. OpenVDB Python
 bindings are ABI-coupled native packages and are not available from the selected uv
-index. The reproducible optional environment is therefore isolated in Docker:
+index. The reproducible optional environment is isolated in Docker:
 
 ```bash
-docker build -t vdbmat-phase0-step10:blender4.5.11 \
-  -f tools/phase0/Dockerfile.openvdb-cycles .
+docker build -t vdbmat-openvdb-cycles:blender4.5.11 \
+  -f tools/Dockerfile.openvdb-cycles .
 
 docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp \
   -e PYTHONPATH=/work/src -v "$PWD:/work" -w /work \
-  vdbmat-phase0-step10:blender4.5.11 \
+  vdbmat-openvdb-cycles:blender4.5.11 \
   python3 examples/phase0/export_openvdb_fixtures.py \
-  .local/phase0/openvdb-step10-native
+  .local/openvdb-native
 
 docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp \
-  -v "$PWD:/work" -w /work vdbmat-phase0-step10:blender4.5.11 \
+  -v "$PWD:/work" -w /work vdbmat-openvdb-cycles:blender4.5.11 \
   python3 examples/phase0/render_blender_fixtures.py \
-  .local/phase0/openvdb-step10-native \
-  .local/phase0/cycles-step10-native --blender blender
+  .local/openvdb-native \
+  .local/cycles-native --blender blender
 ```
 
-The first command writes one `.vdb`, `openvdb-manifest.json`, and
-`capabilities.json` per fixture. The second invokes Blender in background mode for
-every manifest and writes a PNG, `.blend`, and hash report. No scene edits are needed.
+The first command writes one `.vdb`, `openvdb-manifest.json`, and `capabilities.json`
+per fixture. The second invokes Blender in background mode for every manifest and
+writes a PNG, `.blend`, and hash report. No scene edits are needed.
 
-The installed image is `vdbmat-phase0-step10:blender4.5.11`. Native OpenVDB readback
-and Blender integration tests both pass. All six fixtures load and render without
-scene edits, producing `.vdb`, PNG, and `.blend` artifacts under the two `-native`
-directories above. The Ubuntu Blender 4.0.2 package crashed inside Cycles for even a
-minimal fog volume; the official 4.5.11 LTS build passed the same isolation check and
-is the supported proof runtime. Denoising is explicitly disabled for deterministic
+Only the official Blender 4.5.11 LTS build is supported; Ubuntu's packaged Blender
+4.0.2 crashes in Cycles with a minimal VDB. Denoising is disabled for deterministic
 smoke renders and compatibility with CPU-only builds.
 
 ## Grid contract
@@ -68,9 +60,9 @@ world(i,j,k) = local_to_world(
 
 This retains anisotropic voxel size, rigid rotation, translation, and metre units.
 The manifest stores the equivalent column-vector matrix; OpenVDB receives its
-transpose because its `Mat4` convention right-multiplies row vectors. The optional
-native test inspects names, `FloatGrid` types, bounds, selected axis-marker values,
-and `indexToWorld` results. This follows the official
+transpose because its `Mat4` convention right-multiplies row vectors. The native test
+inspects names, `FloatGrid` types, bounds, selected axis-marker values, and
+`indexToWorld` results. This follows the official
 [OpenVDB Python array and I/O contract](https://www.openvdb.org/documentation/doxygen/python.html)
 and [cell-centred transform guidance](https://www.openvdb.org/documentation/doxygen/transformsAndMaps.html).
 
@@ -97,7 +89,7 @@ The node construction uses Blender's documented volume density attributes and
 [volume shader nodes](https://docs.blender.org/manual/en/latest/render/materials/components/volume.html).
 The reductions are adapter-only. Canonical arrays are neither mutated nor relabeled.
 
-## Limitations and decision
+## Known limitations
 
 - The Cycles proof does not reproduce spatial RGB extinction one-to-one; it uses a
   declared scalar reduction.
@@ -105,10 +97,6 @@ The reductions are adapter-only. Canonical arrays are neither mutated nor relabe
   interfaces are not approximated silently; both are reported unsupported.
 - Sparse background voxels use each FloatGrid's zero background. This is exact for
   zero coefficients and `g`; positive IOR cells remain active.
-- The 16 x 16, one-sample native smoke outputs are intentionally low-cost load/render
-  evidence. Several fixtures share a dark-image hash, so image-level orientation and
-  appearance discrimination remains Step 11 work; Step 10 orientation evidence is the
-  selected-value and `indexToWorld` inspection.
-
-The selected contract and native runtime gate pass and are suitable for Step 11
-field/transform conformance work.
+- Native smoke renders are intentionally low-cost load/render evidence, not an
+  appearance baseline; orientation is verified through selected-value and
+  `indexToWorld` inspection rather than image content alone.

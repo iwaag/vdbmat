@@ -322,5 +322,5 @@ def _load_openvdb() -> ModuleType:
             pass
     raise OpenVDBDependencyError(
         "OpenVDB Python bindings are unavailable; run in Blender's Python or "
-        "the pinned tools/phase0/Dockerfile.openvdb-cycles environment"
+        "the pinned tools/Dockerfile.openvdb-cycles environment"
     )

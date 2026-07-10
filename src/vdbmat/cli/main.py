@@ -281,7 +281,7 @@ def _dispatch(arguments: argparse.Namespace) -> dict[str, Any]:
             if arguments.target == "openvdb":
                 document["follow_up"] = (
                     "Render openvdb-manifest.json with Blender/Cycles in the pinned "
-                    "tools/phase0/Dockerfile.openvdb-cycles environment."
+                    "tools/Dockerfile.openvdb-cycles environment."
                 )
             return document
     except CliError:

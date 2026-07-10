@@ -21,7 +21,7 @@ three factors**, the first of which is fundamental:
    `1.167 m⁻¹`; `window_coupon` is mostly transparent with small white/black inclusions.
    A non-scattering, weakly-absorbing medium is nearly invisible on its own, and the
    OpenVDB/Cycles adapter deliberately drops the internal IOR interfaces (documented in
-   `docs/phase1-export-workflow.md`). So the object has no refractive surface to catch
+   `docs/export-workflow.md`). So the object has no refractive surface to catch
    light and no medium to speak of → it disappears into the background. Mitsuba shows
    the shape/steps only because it builds the IOR interface meshes.
 2. **Camera near-clip left at the 0.1 m default.** The objects are centimetre-scale
@@ -56,7 +56,7 @@ This is the technical basis of the Blender demo side-mission
 
 ### Permanent tooling
 
-Both run in the pinned `tools/phase0/Dockerfile.openvdb-cycles` image.
+Both run in the pinned `tools/Dockerfile.openvdb-cycles` image.
 
 **Inspect what is actually inside an exported volume** (grid value ranges; instantly
 reveals "this piece is pure transparent resin"):

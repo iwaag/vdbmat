@@ -1,10 +1,10 @@
-# Phase 0 Cross-Consumer Conformance
+# Cross-Consumer Conformance Check
 
 ## Purpose
 
-The Step 11 check compares contracts shared by the Mitsuba 3 and OpenVDB/Blender
-Cycles proofs. It does not compare final pixels or claim that the renderers implement
-the same transport model.
+The cross-consumer conformance check compares contracts shared by the Mitsuba 3 and
+OpenVDB/Blender Cycles adapters. It does not compare final pixels or claim that the
+renderers implement the same transport model.
 
 The command maps all six deterministic fixtures, round-trips each optical volume
 through Zarr, and runs both adapters' pure conversion paths without importing Mitsuba,
@@ -12,22 +12,22 @@ OpenVDB, or Blender:
 
 ```bash
 uv run python examples/phase0/check_cross_consumer_conformance.py \
-  .local/phase0/conformance-step11.json
+  .local/conformance.json
 ```
 
 Optional image sanity checks can inspect already generated proof outputs:
 
 ```bash
 uv run python examples/phase0/check_cross_consumer_conformance.py \
-  .local/phase0/conformance-step11-with-images.json \
-  --mitsuba-renders .local/phase0/mitsuba-step9 \
-  --cycles-renders .local/phase0/cycles-step10-native \
+  .local/conformance-with-images.json \
+  --mitsuba-renders .local/mitsuba-fixtures \
+  --cycles-renders .local/cycles-native \
   --cycles-width 16 --cycles-height 16
 ```
 
-The explicit 16 × 16 Cycles size above describes the low-sample native smoke outputs
-currently stored locally. Use the default 64 × 64 expectation for the documented
-reference render configuration.
+The explicit 16 x 16 Cycles size above describes the low-sample native smoke outputs
+stored locally. Use the default 64 x 64 expectation for the documented reference
+render configuration.
 
 ## Checked contracts
 
@@ -68,12 +68,5 @@ hidden with fixture-specific corrections:
 | Scene and pixels | Mitsuba proof camera/light/transport | Blender proof camera/light/transport |
 
 Final pixels are therefore not compared across consumers. The image sanity check also
-does not impose equal hashes or equal brightness between renderers.
-
-## Step 11 result
-
-On 2026-06-29, the contract-only command passed 60 of 60 checks across all six
-fixtures. Adding the existing Mitsuba 64 × 64 and Cycles 16 × 16 smoke PNGs passed all
-12 image checks, for 72 of 72 total checks. The machine-readable reports are generated
-under `.local/phase0/` and are not committed.
-
+does not impose equal hashes or equal brightness between renderers. Machine-readable
+reports are generated under `.local/` and are not committed.

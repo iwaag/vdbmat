@@ -1,15 +1,15 @@
-# Phase 1 reference baselines
+# Reference Baselines
 
-The Phase 1 visual baselines are deterministic software-regression artifacts. Their
-optical coefficients are provisional and uncalibrated; they are not predictions of a
-physical print.
+The visual baselines are deterministic software-regression artifacts. Their optical
+coefficients are provisional and uncalibrated; they are not predictions of a physical
+print.
 
 Generate both canonical run bundles and the primary Mitsuba baselines from a clean
 output directory:
 
 ```bash
 uv run --group mitsuba python examples/phase1/generate_reference_baselines.py \
-  .local/phase1/step10
+  .local/baselines
 ```
 
 This regenerates the inputs, runs both canonical pipelines with portable relative
@@ -24,11 +24,11 @@ asymmetric marker are visible. The stepped-wedge view exposes all four steps.
 
 OpenVDB/Cycles remains a pinned interoperability smoke consumer. Export and render
 each object's restored `optical.zarr` with the commands in
-`docs/phase1-export-workflow.md`, then attach the evidence to the manifest:
+[the export workflow](export-workflow.md), then attach the evidence to the manifest:
 
 ```bash
 uv run python examples/phase1/generate_reference_baselines.py \
-  .local/phase1/step10 --record-cycles
+  .local/baselines --record-cycles
 ```
 
 The pinned smoke settings are 64 x 64, 32 samples, seed `20260629`, and 8 maximum

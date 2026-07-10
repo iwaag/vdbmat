@@ -4,11 +4,11 @@ VDBMAT is a renderer-independent preprocessing backend for voxel-based
 material-jetting appearance research. The project will convert material voxel
 data into explicit optical-property volumes for downstream renderers.
 
-Phase 1 is complete: it adds explicit direct-voxel and watertight STL inputs, dense
-reference voxelization, deterministic run bundles, an installed CLI, and reproducible
-renderer baselines to the Phase 0 foundations. See the
-[Phase 1 research MVP report](docs/phase1-research-mvp-report.md) for supported scope,
-evidence, and limitations.
+It supports explicit direct-voxel and watertight STL inputs, dense reference
+voxelization, deterministic run bundles, an installed CLI, and reproducible renderer
+baselines. See [ADR-006](docs/adr/0006-phase1-inputs-and-voxelization.md) for input
+contracts and voxelization semantics, and [ADR-008](docs/adr/0008-cli-contract-and-failure-semantics.md)
+for the CLI and failure model.
 
 ## Architecture
 
@@ -73,9 +73,9 @@ uv sync --locked --group openvdb
 
 The OpenVDB group is empty because compatible Python bindings and Blender are
 provided by the isolated integration container documented in
-[the OpenVDB/Cycles proof](docs/openvdb/phase0-cycles-proof.md).
+[the OpenVDB/Cycles integration guide](docs/openvdb/cycles-integration.md).
 
-## Phase 1 quickstart
+## Quickstart
 
 Optical coefficients are provisional and uncalibrated. These commands verify the
 software workflow; they do not predict a physical print.
@@ -106,7 +106,7 @@ uv run vdbmat inspect .local/phase1/quickstart/stepped_wedge --json
 ```
 
 Optional Mitsuba and OpenVDB/Cycles export commands are documented in the
-[Phase 1 export workflow](docs/phase1-export-workflow.md). Input contracts, command
+[export workflow](docs/export-workflow.md). Input contracts, command
 failures, and exit codes are documented in [ADR-006](docs/adr/0006-phase1-inputs-and-voxelization.md)
 and [ADR-008](docs/adr/0008-cli-contract-and-failure-semantics.md).
 
@@ -192,7 +192,7 @@ uv run python examples/phase0/map_synthetic_fixtures.py
 
 The reference mapping uses direct label lookup and linear volume-fraction
 mixing. Its assumptions and provisional values are documented in
-[Phase 0 Reference Optical Mapping v1](docs/optics/reference-mapping-v1.md).
+[the reference optical mapping](docs/optics/reference-mapping-v1.md).
 
 Inspect a persisted volume without loading array payloads, or generate the
 fixture size and partial-read report:
@@ -230,17 +230,17 @@ summary, and a machine-readable capability report.
 Build and verify the isolated OpenVDB/Blender Cycles proof:
 
 ```bash
-docker build -t vdbmat-phase0-step10:blender4.5.11 \
-  -f tools/phase0/Dockerfile.openvdb-cycles .
+docker build -t vdbmat-openvdb-cycles:blender4.5.11 \
+  -f tools/Dockerfile.openvdb-cycles .
 docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp \
   -e PYTHONPATH=/work/src -v "$PWD:/work" -w /work \
-  vdbmat-phase0-step10:blender4.5.11 \
+  vdbmat-openvdb-cycles:blender4.5.11 \
   python3 -m pytest -q tests/integration/test_openvdb.py \
   tests/integration/test_blender_cycles.py
 ```
 
 Export and headless-render commands are in the
-[OpenVDB/Cycles proof](docs/openvdb/phase0-cycles-proof.md).
+[OpenVDB/Cycles integration guide](docs/openvdb/cycles-integration.md).
 
 Run the renderer-independent cross-consumer contract check for every fixture:
 
@@ -253,22 +253,24 @@ The command includes an exact Zarr round-trip and both pure adapter conversions.
 does not require renderer bindings. Optional `--mitsuba-renders` and
 `--cycles-renders` arguments add gross PNG sanity checks without comparing renderer
 pixels for physical equality. See
-[Phase 0 cross-consumer conformance](docs/conformance/phase0-cross-consumer.md).
+[cross-consumer conformance](docs/conformance/cross-consumer-check.md).
 
-## Phase 0 design contracts
+## Design contracts
 
 - [ADR-001: coordinates, axes, units, and sampling](docs/adr/0001-coordinates-axes-units-and-sampling.md)
 - [ADR-002: canonical volume schemas](docs/adr/0002-canonical-volume-schemas.md)
 - [ADR-003: boundaries and refractive index](docs/adr/0003-boundaries-and-refractive-index.md)
 - [ADR-004: Zarr layout and compatibility](docs/adr/0004-zarr-layout-and-compatibility.md)
 - [ADR-005: exporter boundary](docs/adr/0005-exporter-boundary.md)
+- [ADR-006: Phase 1 inputs and voxelization](docs/adr/0006-phase1-inputs-and-voxelization.md)
+- [ADR-007: pipeline run and artifact bundle](docs/adr/0007-pipeline-run-and-artifact-bundle.md)
+- [ADR-008: CLI contract and failure semantics](docs/adr/0008-cli-contract-and-failure-semantics.md)
+- [ADR-009: input generator contract and external mappings](docs/adr/0009-input-generator-contract-and-external-mappings.md)
 - [Logical volume schema 1.0](docs/schemas/volume-schema-v1.md)
 - [Worked schema examples](docs/schemas/examples/)
-- [Phase 0 Zarr fixture report](docs/zarr/phase0-fixture-report.md)
-- [Phase 0 Mitsuba consumer proof](docs/mitsuba/phase0-proof.md)
-- [Phase 0 OpenVDB/Cycles consumer proof](docs/openvdb/phase0-cycles-proof.md)
-- [Phase 0 cross-consumer conformance](docs/conformance/phase0-cross-consumer.md)
-- [Phase 0 feasibility report](docs/phase0-feasibility-report.md)
+- [Mitsuba consumer integration](docs/mitsuba/integration.md)
+- [OpenVDB/Cycles consumer integration](docs/openvdb/cycles-integration.md)
+- [Cross-consumer conformance](docs/conformance/cross-consumer-check.md)
 
 ## License
 
