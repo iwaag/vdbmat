@@ -9,13 +9,15 @@ judge scale/reflection against. Instead this script opens a hand-authored templa
 ``.blend`` (e.g. ``.local/local_demo/template_scene/cube_diorama.blend``) that already
 has lighting, camera, and a placeholder object at the position/scale you want the
 generated model to render at, and swaps that placeholder's mesh data for the new
-``exterior-*.ply``. Only the mesh data changes — the placeholder's transform,
-materials, name, and collection membership are left untouched, so the template's
-manually-tuned framing carries over automatically.
+``exterior-*.ply``. The placeholder's materials, name, scale/rotation, and collection
+membership are retained. Its translation is adjusted so the replacement's world-space
+bounds centre matches the placeholder's former centre; source-coordinate offsets
+therefore do not move a different model out of the manually tuned framing.
 
 Invoke inside Blender's Python (the pinned ``vdbmat-openvdb-cycles`` image):
 
-    blender --background --python examples/pipeline_run/demo/blender_template_swap.py -- \
+    blender --background --python \
+        examples/pipeline_run/demo/blender_template_swap.py -- \
         TEMPLATE_BLEND EXTERIOR_PLY OUTPUT_PNG [--target-object exterior-000] \
         [--samples 96]
 
@@ -33,13 +35,16 @@ import sys
 from pathlib import Path
 
 import bpy
+from mathutils import Vector
 
 
 def _parse_args() -> argparse.Namespace:
     try:
         extra = sys.argv[sys.argv.index("--") + 1 :]
     except ValueError:
-        raise SystemExit("expected: -- TEMPLATE_BLEND EXTERIOR_PLY OUTPUT_PNG [options]")
+        raise SystemExit(
+            "expected: -- TEMPLATE_BLEND EXTERIOR_PLY OUTPUT_PNG [options]"
+        ) from None
     parser = argparse.ArgumentParser(prog="blender_template_swap")
     parser.add_argument("template_blend", type=Path)
     parser.add_argument("exterior_ply", type=Path)
@@ -59,41 +64,108 @@ def _import_ply(path: Path) -> bpy.types.Object:
     return obj
 
 
-def _swap_mesh(target: bpy.types.Object, replacement: bpy.types.Object) -> None:
+def _bounds_center(obj: bpy.types.Object) -> Vector:
+    corners = [obj.matrix_world @ Vector(corner) for corner in obj.bound_box]
+    return Vector(
+        tuple(
+            (
+                min(corner[axis] for corner in corners)
+                + max(corner[axis] for corner in corners)
+            )
+            * 0.5
+            for axis in range(3)
+        )
+    )
+
+
+def _swap_mesh_centered(
+    target: bpy.types.Object, replacement: bpy.types.Object
+) -> Vector:
+    if target.type != "MESH":
+        raise SystemExit(f"target object {target.name!r} is not a mesh")
+    desired_center = _bounds_center(target)
+    local_corners = [Vector(corner) for corner in replacement.bound_box]
+    replacement_local_center = Vector(
+        tuple(
+            (
+                min(corner[axis] for corner in local_corners)
+                + max(corner[axis] for corner in local_corners)
+            )
+            * 0.5
+            for axis in range(3)
+        )
+    )
     old_mesh = target.data
+    materials = tuple(
+        material for material in old_mesh.materials if material is not None
+    )
     target.data = replacement.data
+    target.data.materials.clear()
+    for material in materials:
+        target.data.materials.append(material)
+
+    matrix = target.matrix_world.copy()
+    matrix.translation = desired_center - matrix.to_3x3() @ replacement_local_center
+    target.matrix_world = matrix
     bpy.data.objects.remove(replacement, do_unlink=True)
     if old_mesh.users == 0:
         bpy.data.meshes.remove(old_mesh)
+    return desired_center
+
+
+def _enabled_view_layers(scene: bpy.types.Scene) -> tuple[str, ...]:
+    enabled = tuple(layer.name for layer in scene.view_layers if layer.use)
+    if not enabled:
+        raise SystemExit(
+            "template has no View Layer enabled for rendering; enable at least one"
+        )
+    return enabled
 
 
 def main() -> None:
     args = _parse_args()
-    if not args.exterior_ply.exists():
-        raise SystemExit(f"no such file: {args.exterior_ply}")
+    template_blend = args.template_blend.resolve()
+    exterior_ply = args.exterior_ply.resolve()
+    output_png = args.output_png.resolve()
+    if not template_blend.is_file():
+        raise SystemExit(f"no such Blender template: {template_blend}")
+    if not exterior_ply.is_file():
+        raise SystemExit(f"no such file: {exterior_ply}")
+    if args.samples <= 0:
+        raise SystemExit("--samples must be greater than zero")
 
-    bpy.ops.wm.open_mainfile(filepath=str(args.template_blend))
+    bpy.ops.wm.open_mainfile(filepath=str(template_blend))
 
     target = bpy.data.objects.get(args.target_object)
     if target is None:
         available = ", ".join(sorted(o.name for o in bpy.data.objects)) or "(none)"
         raise SystemExit(
-            f"no object named {args.target_object!r} in {args.template_blend}; "
+            f"no object named {args.target_object!r} in {template_blend}; "
             f"available objects: {available}"
         )
 
-    replacement = _import_ply(args.exterior_ply)
-    _swap_mesh(target, replacement)
+    replacement = _import_ply(exterior_ply)
+    center = _swap_mesh_centered(target, replacement)
 
     scene = bpy.context.scene
+    if scene.render.engine != "CYCLES":
+        raise SystemExit(
+            f"template render engine must be CYCLES, got {scene.render.engine!r}"
+        )
+    layers = _enabled_view_layers(scene)
     scene.cycles.samples = args.samples
-    args.output_png.parent.mkdir(parents=True, exist_ok=True)
-    scene.render.filepath = str(args.output_png)
+    output_png.parent.mkdir(parents=True, exist_ok=True)
+    scene.render.filepath = str(output_png)
     scene.render.image_settings.file_format = "PNG"
 
+    print(
+        f"SWAP target={target.name} exterior={exterior_ply.name} "
+        f"center={tuple(round(value, 6) for value in center)} "
+        f"materials={len(target.data.materials)} layers={','.join(layers)}"
+    )
     bpy.ops.render.render(write_still=True)
 
-    image = bpy.data.images.load(str(args.output_png))
+    image = bpy.data.images.load(str(output_png))
     pixels = image.pixels[:]
     channels = [pixels[i] for i in range(len(pixels)) if i % 4 != 3]
     lo = min(channels)
@@ -102,7 +174,7 @@ def main() -> None:
     var = sum((c - mean) ** 2 for c in channels) / len(channels)
     print(
         f"PIXELSTATS target={args.target_object} "
-        f"min={lo:.4f} max={hi:.4f} mean={mean:.4f} std={var ** 0.5:.4f}"
+        f"min={lo:.4f} max={hi:.4f} mean={mean:.4f} std={var**0.5:.4f}"
     )
 
 

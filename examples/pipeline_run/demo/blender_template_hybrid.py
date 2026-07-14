@@ -3,6 +3,8 @@
 This is a qualitative, uncalibrated demo helper.  It combines the glass exterior
 written by ``vdbmat export mitsuba`` with the absorption/scattering grids written by
 ``vdbmat export openvdb``.  Internal IOR interfaces are intentionally not represented.
+The template material slots and scale/rotation are preserved, while translation is
+adjusted to align replacement and placeholder world-space bounds centres.
 
 Invoke inside Blender's Python (the pinned ``vdbmat-openvdb-cycles`` image):
 
@@ -22,6 +24,7 @@ from pathlib import Path
 from typing import Any
 
 import bpy
+from mathutils import Vector
 
 REQUIRED_GRIDS = frozenset({"cycles_absorption", "cycles_scattering"})
 
@@ -98,14 +101,53 @@ def _import_ply(path: Path) -> bpy.types.Object:
     return imported[0]
 
 
-def _swap_mesh(target: bpy.types.Object, replacement: bpy.types.Object) -> None:
+def _bounds_center(obj: bpy.types.Object) -> Vector:
+    corners = [obj.matrix_world @ Vector(corner) for corner in obj.bound_box]
+    return Vector(
+        tuple(
+            (
+                min(corner[axis] for corner in corners)
+                + max(corner[axis] for corner in corners)
+            )
+            * 0.5
+            for axis in range(3)
+        )
+    )
+
+
+def _swap_mesh_centered(
+    target: bpy.types.Object, replacement: bpy.types.Object
+) -> Vector:
     if target.type != "MESH":
         raise SystemExit(f"target object {target.name!r} is not a mesh")
+    desired_center = _bounds_center(target)
+    local_corners = [Vector(corner) for corner in replacement.bound_box]
+    replacement_local_center = Vector(
+        tuple(
+            (
+                min(corner[axis] for corner in local_corners)
+                + max(corner[axis] for corner in local_corners)
+            )
+            * 0.5
+            for axis in range(3)
+        )
+    )
     old_mesh = target.data
+    materials = tuple(
+        material for material in old_mesh.materials if material is not None
+    )
     target.data = replacement.data
+    target.data.materials.clear()
+    for material in materials:
+        target.data.materials.append(material)
+
+    matrix = target.matrix_world.copy()
+    matrix.translation = desired_center - matrix.to_3x3() @ replacement_local_center
+    target.matrix_world = matrix
     bpy.data.objects.remove(replacement, do_unlink=True)
     if old_mesh.users == 0:
         bpy.data.meshes.remove(old_mesh)
+    return desired_center
 
 
 def _uniform_scale(matrix: Any, *, tolerance: float = 1e-6) -> float:
@@ -194,6 +236,15 @@ def _pixel_stats(path: Path) -> tuple[float, float, float, float]:
     return lo, hi, mean, variance**0.5
 
 
+def _enabled_view_layers(scene: bpy.types.Scene) -> tuple[str, ...]:
+    enabled = tuple(layer.name for layer in scene.view_layers if layer.use)
+    if not enabled:
+        raise SystemExit(
+            "template has no View Layer enabled for rendering; enable at least one"
+        )
+    return enabled
+
+
 def main() -> None:
     args = _parse_args()
     template_blend = args.template_blend.resolve()
@@ -219,7 +270,7 @@ def main() -> None:
         )
     scale = _uniform_scale(target.matrix_world)
     replacement = _import_ply(exterior)
-    _swap_mesh(target, replacement)
+    center = _swap_mesh_centered(target, replacement)
     _, grids = _add_volume(vdb_path, target, float(manifest["phase_g"]))
 
     scene = bpy.context.scene
@@ -227,6 +278,7 @@ def main() -> None:
         raise SystemExit(
             f"template render engine must be CYCLES, got {scene.render.engine!r}"
         )
+    layers = _enabled_view_layers(scene)
     if args.samples is not None:
         scene.cycles.samples = args.samples
     output_png.parent.mkdir(parents=True, exist_ok=True)
@@ -239,7 +291,9 @@ def main() -> None:
 
     print(
         f"HYBRID target={target.name} exterior={exterior.name} vdb={vdb_path.name} "
-        f"scale={scale:.6g} grids={','.join(grids)} "
+        f"scale={scale:.6g} center={tuple(round(value, 6) for value in center)} "
+        f"materials={len(target.data.materials)} layers={','.join(layers)} "
+        f"grids={','.join(grids)} "
         "mode=qualitative-uncalibrated"
     )
     bpy.ops.render.render(write_still=True)
