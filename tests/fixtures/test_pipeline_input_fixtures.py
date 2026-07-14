@@ -19,13 +19,17 @@ from vdbmat.core import MaterialLabelVolume, MaterialRole
 from vdbmat.fixtures import (
     COUPON_MANIFEST_NAME,
     COUPON_PAYLOAD_NAME,
+    NESTED_CUBE_MANIFEST_NAME,
+    NESTED_CUBE_PAYLOAD_NAME,
     WEDGE_MANIFEST_NAME,
     WEDGE_PAYLOAD_NAME,
+    nested_material_cube_label,
     window_coupon_label,
     write_phase1_fixtures,
 )
 from vdbmat.io import read_material_label_manifest
 from vdbmat.io.errors import VoxelManifestError
+from vdbmat.optics import map_material_volume_to_optical, phase0_provisional_mapping
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _INPUTS = _REPO_ROOT / "examples" / "pipeline_run" / "inputs"
@@ -45,6 +49,9 @@ def test_committed_inputs_exist() -> None:
         COUPON_PAYLOAD_NAME,
         COUPON_MANIFEST_NAME,
         "window_coupon.expected.json",
+        NESTED_CUBE_MANIFEST_NAME,
+        NESTED_CUBE_PAYLOAD_NAME,
+        "nested_material_cube.expected.json",
         WEDGE_MANIFEST_NAME,
         WEDGE_PAYLOAD_NAME,
         "stepped_wedge.expected.json",
@@ -106,6 +113,59 @@ def test_coupon_features_are_axis_asymmetric() -> None:
 
 
 # --------------------------------------------------------------------------- #
+# Nested material cube: transparent boundary and centred opaque core
+# --------------------------------------------------------------------------- #
+
+
+def test_nested_cube_matches_committed_summary() -> None:
+    expected = _committed_summary("nested_material_cube.expected.json")
+    volume = read_material_label_manifest(_INPUTS / NESTED_CUBE_MANIFEST_NAME)
+    label = np.asarray(volume.material_id)
+
+    assert list(volume.geometry.shape_zyx) == expected["shape_zyx"]
+    assert list(volume.geometry.voxel_size_xyz_m) == expected["voxel_size_xyz_m"]
+    ids, counts = np.unique(label, return_counts=True)
+    actual_counts = {int(i): int(c) for i, c in zip(ids, counts, strict=True)}
+    expected_counts = {
+        int(k): v for k, v in expected["material_counts"].items() if v > 0
+    }
+    assert actual_counts == expected_counts
+
+    core = expected["opaque_core"]
+    z0, y0, x0 = core["z"][0], core["y"][0], core["x"][0]
+    assert int(label[z0, y0, x0]) == core["material_id"]
+    assert f"sha256:{expected['payload_sha256']}" in volume.provenance.sources
+
+
+def test_nested_cube_boundary_is_entirely_transparent() -> None:
+    label = nested_material_cube_label()
+    boundary = np.concatenate(
+        (
+            label[0].ravel(),
+            label[-1].ravel(),
+            label[:, 0, :].ravel(),
+            label[:, -1, :].ravel(),
+            label[:, :, 0].ravel(),
+            label[:, :, -1].ravel(),
+        )
+    )
+    assert np.all(boundary == 1)
+    assert np.array_equal(label == 3, np.flip(label == 3, axis=(0, 1, 2)))
+
+
+def test_nested_cube_maps_to_transparent_shell_and_absorbing_core() -> None:
+    material = read_material_label_manifest(_INPUTS / NESTED_CUBE_MANIFEST_NAME)
+    optical = map_material_volume_to_optical(material, phase0_provisional_mapping())
+
+    assert optical.sigma_a[0, 0, 0] == pytest.approx((2.0, 1.0, 0.5))
+    assert optical.sigma_s[0, 0, 0] == pytest.approx((0.0, 0.0, 0.0))
+    assert float(optical.ior[0, 0, 0]) == pytest.approx(1.48)
+    assert optical.sigma_a[8, 8, 8] == pytest.approx((4000.0, 5000.0, 6000.0))
+    assert optical.sigma_s[8, 8, 8] == pytest.approx((100.0, 100.0, 100.0))
+    assert float(optical.ior[8, 8, 8]) == pytest.approx(1.52)
+
+
+# --------------------------------------------------------------------------- #
 # Stepped wedge: valid canonical volume matching the analytic summary
 # --------------------------------------------------------------------------- #
 
@@ -124,9 +184,7 @@ def test_wedge_matches_committed_summary() -> None:
     assert list(volume.geometry.shape_zyx) == expected["shape_zyx"]
     assert list(volume.geometry.voxel_size_xyz_m) == expected["voxel_size_xyz_m"]
     translation = [row[3] for row in volume.geometry.local_to_world[:3]]
-    assert translation == pytest.approx(
-        expected["local_to_world_translation_m"]
-    )
+    assert translation == pytest.approx(expected["local_to_world_translation_m"])
     assert int(np.count_nonzero(label)) == expected["occupied_cells"]
     assert f"sha256:{expected['payload_sha256']}" in volume.provenance.sources
 

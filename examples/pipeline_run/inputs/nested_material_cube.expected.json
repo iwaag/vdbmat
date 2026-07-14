@@ -1,0 +1,44 @@
+{
+  "bounds_max_xyz_m": [
+    0.016,
+    0.016,
+    0.016
+  ],
+  "bounds_min_xyz_m": [
+    0.0,
+    0.0,
+    0.0
+  ],
+  "material_counts": {
+    "0": 0,
+    "1": 3880,
+    "3": 216
+  },
+  "opaque_core": {
+    "cell_count": 216,
+    "material_id": 3,
+    "x": [
+      5,
+      11
+    ],
+    "y": [
+      5,
+      11
+    ],
+    "z": [
+      5,
+      11
+    ]
+  },
+  "payload_sha256": "c1ee470712b65f13f7b0d1371e2c3b5c2538b29e386e2468ebcce6ab00b502d0",
+  "shape_zyx": [
+    16,
+    16,
+    16
+  ],
+  "voxel_size_xyz_m": [
+    0.001,
+    0.001,
+    0.001
+  ]
+}

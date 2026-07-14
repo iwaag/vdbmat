@@ -1,6 +1,6 @@
 """Deterministic Phase 1 representative input fixtures (plan Step 4, ADR-009).
 
-Two reviewable, analytically specified inputs exercise the ``vdbmat.voxels/1.0.0``
+Three reviewable, analytically specified inputs exercise the ``vdbmat.voxels/1.0.0``
 direct-voxel contract end to end without opaque binaries:
 
 * a **multi-material window coupon** (a transparent matrix with one white inclusion
@@ -8,6 +8,8 @@ direct-voxel contract end to end without opaque binaries:
 * a **single-material stepped wedge** (a staircase occupancy with analytically
   predictable per-step cell counts), standing in for output of an external
   geometry-to-voxel generator.
+* a **nested material cube** (an opaque black cube wholly enclosed by a transparent
+  cube), used by the qualitative Blender PLY + OpenVDB demo.
 
 Every generator is pure and deterministic. The expected summaries here are derived
 analytically from the fixture *definition*, not from the reader under test, so a
@@ -186,6 +188,115 @@ def window_coupon_summary() -> CouponSummary:
 
 
 # --------------------------------------------------------------------------- #
+# Transparent cube with an enclosed opaque core (Blender hybrid demo)
+# --------------------------------------------------------------------------- #
+
+_NESTED_CUBE_SHAPE_ZYX = (16, 16, 16)
+_NESTED_CUBE_VOXEL_SIZE_XYZ_M = (0.001, 0.001, 0.001)
+_NESTED_CUBE_CORE_ZYX = ((5, 11), (5, 11), (5, 11))
+
+NESTED_CUBE_MANIFEST_NAME = "nested_material_cube.voxels.json"
+NESTED_CUBE_PAYLOAD_NAME = "nested_material_cube.material_id.npy"
+
+
+@dataclass(frozen=True, slots=True)
+class NestedCubeSummary:
+    """Analytic expectations for the nested-material Blender demo input."""
+
+    shape_zyx: tuple[int, int, int]
+    voxel_size_xyz_m: tuple[float, float, float]
+    material_counts: dict[int, int]
+    opaque_core: BoxRegion
+    bounds_min_xyz_m: tuple[float, float, float]
+    bounds_max_xyz_m: tuple[float, float, float]
+    payload_sha256: str
+
+
+def nested_material_cube_label() -> npt.NDArray[np.uint16]:
+    """Return a transparent cube containing one centred opaque black cube."""
+    label = np.ones(_NESTED_CUBE_SHAPE_ZYX, dtype=np.uint16)
+    z, y, x = _NESTED_CUBE_CORE_ZYX
+    label[z[0] : z[1], y[0] : y[1], x[0] : x[1]] = 3
+    return label
+
+
+def nested_material_cube_palette() -> MaterialPalette:
+    """Return the background/transparent/black palette for the nested cube."""
+    return MaterialPalette.from_sequence(
+        (
+            MaterialDefinition(0, "air", MaterialRole.BACKGROUND),
+            MaterialDefinition(1, "transparent-resin", MaterialRole.MATERIAL),
+            MaterialDefinition(3, "black-opaque-resin", MaterialRole.MATERIAL),
+        )
+    )
+
+
+def nested_material_cube_payload_bytes() -> bytes:
+    """Return the exact ``.npy`` bytes of the nested cube payload."""
+    buffer = io.BytesIO()
+    np.save(buffer, nested_material_cube_label())
+    return buffer.getvalue()
+
+
+def nested_material_cube_manifest(payload_sha256: str) -> dict[str, Any]:
+    """Return the direct-voxel manifest document for the nested cube."""
+    return {
+        "format": "vdbmat.voxels",
+        "format_version": "1.0.0",
+        "asset_type": "material-label",
+        "payload": {
+            "path": NESTED_CUBE_PAYLOAD_NAME,
+            "sha256": payload_sha256,
+            "dtype": "uint16",
+            "dimensions": ["z", "y", "x"],
+        },
+        "shape_zyx": list(_NESTED_CUBE_SHAPE_ZYX),
+        "voxel_size_xyz_m": list(_NESTED_CUBE_VOXEL_SIZE_XYZ_M),
+        "local_to_world": [
+            [1, 0, 0, 0],
+            [0, 1, 0, 0],
+            [0, 0, 1, 0],
+            [0, 0, 0, 1],
+        ],
+        "materials": [
+            {"material_id": 0, "name": "air", "role": "background"},
+            {"material_id": 1, "name": "transparent-resin", "role": "material"},
+            {
+                "material_id": 3,
+                "name": "black-opaque-resin",
+                "role": "material",
+            },
+        ],
+        "source": {
+            "generator": PHASE1_FIXTURE_GENERATOR,
+            "generator_version": PHASE1_FIXTURE_GENERATOR_VERSION,
+            "identity": "nested-material-cube",
+            "notes": (
+                "Qualitative Blender hybrid demo input; a black opaque cube wholly "
+                "enclosed by a transparent resin cube. Provisional and uncalibrated."
+            ),
+        },
+    }
+
+
+def nested_material_cube_summary() -> NestedCubeSummary:
+    """Return analytic expectations for the nested cube."""
+    core = BoxRegion(3, *_NESTED_CUBE_CORE_ZYX)
+    nz, ny, nx = _NESTED_CUBE_SHAPE_ZYX
+    total = nz * ny * nx
+    sx, sy, sz = _NESTED_CUBE_VOXEL_SIZE_XYZ_M
+    return NestedCubeSummary(
+        shape_zyx=_NESTED_CUBE_SHAPE_ZYX,
+        voxel_size_xyz_m=_NESTED_CUBE_VOXEL_SIZE_XYZ_M,
+        material_counts={0: 0, 1: total - core.cell_count, 3: core.cell_count},
+        opaque_core=core,
+        bounds_min_xyz_m=(0.0, 0.0, 0.0),
+        bounds_max_xyz_m=(nx * sx, ny * sy, nz * sz),
+        payload_sha256=hashlib.sha256(nested_material_cube_payload_bytes()).hexdigest(),
+    )
+
+
+# --------------------------------------------------------------------------- #
 # Single-material stepped wedge (analytic staircase occupancy)
 # --------------------------------------------------------------------------- #
 
@@ -323,7 +434,7 @@ def stepped_wedge_summary() -> WedgeSummary:
 # --------------------------------------------------------------------------- #
 
 
-def _summary_json(summary: CouponSummary | WedgeSummary) -> str:
+def _summary_json(summary: CouponSummary | NestedCubeSummary | WedgeSummary) -> str:
     def _default(obj: Any) -> Any:
         if isinstance(obj, BoxRegion):
             return {
@@ -373,6 +484,26 @@ def write_phase1_fixtures(directory: str | Path) -> dict[str, Path]:
         _summary_json(window_coupon_summary()), encoding="utf-8"
     )
     written["coupon_summary"] = coupon_summary_path
+
+    nested_payload = nested_material_cube_payload_bytes()
+    nested_sha = hashlib.sha256(nested_payload).hexdigest()
+
+    nested_payload_path = base / NESTED_CUBE_PAYLOAD_NAME
+    nested_payload_path.write_bytes(nested_payload)
+    written["nested_cube_payload"] = nested_payload_path
+
+    nested_manifest_path = base / NESTED_CUBE_MANIFEST_NAME
+    nested_manifest_path.write_text(
+        json.dumps(nested_material_cube_manifest(nested_sha), indent=2) + "\n",
+        encoding="utf-8",
+    )
+    written["nested_cube_manifest"] = nested_manifest_path
+
+    nested_summary_path = base / "nested_material_cube.expected.json"
+    nested_summary_path.write_text(
+        _summary_json(nested_material_cube_summary()), encoding="utf-8"
+    )
+    written["nested_cube_summary"] = nested_summary_path
 
     wedge_payload = stepped_wedge_payload_bytes()
     wedge_sha = hashlib.sha256(wedge_payload).hexdigest()

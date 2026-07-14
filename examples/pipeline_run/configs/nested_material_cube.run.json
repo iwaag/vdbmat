@@ -1,0 +1,27 @@
+{
+  "schema": {
+    "name": "vdbmat.pipeline-config",
+    "version": "2.0.0"
+  },
+  "input": {
+    "kind": "direct-voxel",
+    "path": "../inputs/nested_material_cube.voxels.json"
+  },
+  "mapping": {
+    "digest": "sha256:da83581c56ca175bf5888de2650cc84020602f56d8de9111d0bbefb5033252eb",
+    "name": "phase0-provisional-materials-v1"
+  },
+  "stages": {
+    "validate_material": true,
+    "validate_optical": true,
+    "exports": []
+  },
+  "output": {
+    "path": "../../../.local/blender_improve1/nested_material_cube",
+    "overwrite": false
+  },
+  "execution": {
+    "random_seed": 0
+  },
+  "renderer": null
+}

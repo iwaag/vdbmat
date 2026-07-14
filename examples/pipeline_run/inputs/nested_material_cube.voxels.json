@@ -1,0 +1,74 @@
+{
+  "format": "vdbmat.voxels",
+  "format_version": "1.0.0",
+  "asset_type": "material-label",
+  "payload": {
+    "path": "nested_material_cube.material_id.npy",
+    "sha256": "c1ee470712b65f13f7b0d1371e2c3b5c2538b29e386e2468ebcce6ab00b502d0",
+    "dtype": "uint16",
+    "dimensions": [
+      "z",
+      "y",
+      "x"
+    ]
+  },
+  "shape_zyx": [
+    16,
+    16,
+    16
+  ],
+  "voxel_size_xyz_m": [
+    0.001,
+    0.001,
+    0.001
+  ],
+  "local_to_world": [
+    [
+      1,
+      0,
+      0,
+      0
+    ],
+    [
+      0,
+      1,
+      0,
+      0
+    ],
+    [
+      0,
+      0,
+      1,
+      0
+    ],
+    [
+      0,
+      0,
+      0,
+      1
+    ]
+  ],
+  "materials": [
+    {
+      "material_id": 0,
+      "name": "air",
+      "role": "background"
+    },
+    {
+      "material_id": 1,
+      "name": "transparent-resin",
+      "role": "material"
+    },
+    {
+      "material_id": 3,
+      "name": "black-opaque-resin",
+      "role": "material"
+    }
+  ],
+  "source": {
+    "generator": "vdbmat.fixtures.phase1",
+    "generator_version": "1.0.0",
+    "identity": "nested-material-cube",
+    "notes": "Qualitative Blender hybrid demo input; a black opaque cube wholly enclosed by a transparent resin cube. Provisional and uncalibrated."
+  }
+}
