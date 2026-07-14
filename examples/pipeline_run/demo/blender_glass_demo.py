@@ -15,7 +15,7 @@ them physically near-invisible (this is the root cause of the historic all-black
 
 Invoke inside Blender's Python (the pinned ``vdbmat-openvdb-cycles`` image):
 
-    blender --background --python examples/phase1/demo/blender_glass_demo.py -- \
+    blender --background --python examples/pipeline_run/demo/blender_glass_demo.py -- \
         MITSUBA_EXPORT_DIR OUTPUT_PNG [--ior 1.48] [--samples 96] [--size 400]
 
 ``MITSUBA_EXPORT_DIR`` is a directory containing ``exterior-*.ply`` (from

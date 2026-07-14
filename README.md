@@ -6,7 +6,7 @@ data into explicit optical-property volumes for downstream renderers.
 
 It supports explicit direct-voxel and watertight STL inputs, dense reference
 voxelization, deterministic run bundles, an installed CLI, and reproducible renderer
-baselines. See [ADR-006](docs/adr/0006-phase1-inputs-and-voxelization.md) for input
+baselines. See [ADR-006](docs/adr/0006-pipeline-inputs-and-voxelization.md) for input
 contracts and voxelization semantics, and [ADR-008](docs/adr/0008-cli-contract-and-failure-semantics.md)
 for the CLI and failure model.
 
@@ -87,10 +87,10 @@ complete canonical pipelines:
 uv sync --locked
 rm -rf .local/phase1/quickstart
 
-uv run vdbmat run examples/phase1/configs/window_coupon.run.json
+uv run vdbmat run examples/pipeline_run/configs/window_coupon.run.json
 uv run vdbmat validate .local/phase1/quickstart/window_coupon --json
 
-uv run vdbmat run examples/phase1/configs/stepped_wedge.run.json
+uv run vdbmat run examples/pipeline_run/configs/stepped_wedge.run.json
 uv run vdbmat validate .local/phase1/quickstart/stepped_wedge --json
 ```
 
@@ -107,7 +107,7 @@ uv run vdbmat inspect .local/phase1/quickstart/stepped_wedge --json
 
 Optional Mitsuba and OpenVDB/Cycles export commands are documented in the
 [export workflow](docs/export-workflow.md). Input contracts, command
-failures, and exit codes are documented in [ADR-006](docs/adr/0006-phase1-inputs-and-voxelization.md)
+failures, and exit codes are documented in [ADR-006](docs/adr/0006-pipeline-inputs-and-voxelization.md)
 and [ADR-008](docs/adr/0008-cli-contract-and-failure-semantics.md).
 
 ## Fixture demo
@@ -115,10 +115,10 @@ and [ADR-008](docs/adr/0008-cli-contract-and-failure-semantics.md).
 Run the complete renderer-independent fixture path:
 
 ```bash
-uv run python examples/phase0/inspect_synthetic_fixtures.py
-uv run python examples/phase0/map_synthetic_fixtures.py
-uv run python examples/phase0/zarr_fixture_report.py
-uv run python examples/phase0/check_cross_consumer_conformance.py \
+uv run python examples/native_fixtures/inspect_synthetic_fixtures.py
+uv run python examples/native_fixtures/map_synthetic_fixtures.py
+uv run python examples/native_fixtures/zarr_fixture_report.py
+uv run python examples/native_fixtures/check_cross_consumer_conformance.py \
   .local/phase0/conformance.json
 ```
 
@@ -177,7 +177,7 @@ renderer adapters remain isolated from core imports and dependencies.
 Generate and inspect the small deterministic Phase 0 fixtures with:
 
 ```bash
-uv run python examples/phase0/inspect_synthetic_fixtures.py
+uv run python examples/native_fixtures/inspect_synthetic_fixtures.py
 ```
 
 The fixture set covers homogeneous transparent and white commands, a sharp
@@ -187,7 +187,7 @@ an anisotropic axis marker.
 Apply the explicit provisional and uncalibrated Phase 0 optical mapping with:
 
 ```bash
-uv run python examples/phase0/map_synthetic_fixtures.py
+uv run python examples/native_fixtures/map_synthetic_fixtures.py
 ```
 
 The reference mapping uses direct label lookup and linear volume-fraction
@@ -198,20 +198,20 @@ Inspect a persisted volume without loading array payloads, or generate the
 fixture size and partial-read report:
 
 ```bash
-uv run python examples/phase0/inspect_zarr.py path/to/asset.zarr
-uv run python examples/phase0/zarr_fixture_report.py
+uv run python examples/native_fixtures/inspect_zarr.py path/to/asset.zarr
+uv run python examples/native_fixtures/zarr_fixture_report.py
 ```
 
 Derive and inspect sharp refractive-index interfaces from every mapped fixture:
 
 ```bash
-uv run python examples/phase0/inspect_ior_interfaces.py
+uv run python examples/native_fixtures/inspect_ior_interfaces.py
 ```
 
 Reproduce the optional Mitsuba IOR API probe with the locked renderer group:
 
 ```bash
-uv run --group mitsuba python examples/phase0/probe_mitsuba_ior.py
+uv run --group mitsuba python examples/native_fixtures/probe_mitsuba_ior.py
 ```
 
 The probe confirms that heterogeneous-medium spatial IOR is rejected while scalar
@@ -220,7 +220,7 @@ dielectric `int_ior`/`ext_ior` is accepted.
 Render all canonical fixture proofs with fixed Mitsuba settings:
 
 ```bash
-uv run --group mitsuba python examples/phase0/render_mitsuba_fixtures.py \
+uv run --group mitsuba python examples/native_fixtures/render_mitsuba_fixtures.py \
   .local/phase0/mitsuba-step9
 ```
 
@@ -245,7 +245,7 @@ Export and headless-render commands are in the
 Run the renderer-independent cross-consumer contract check for every fixture:
 
 ```bash
-uv run python examples/phase0/check_cross_consumer_conformance.py \
+uv run python examples/native_fixtures/check_cross_consumer_conformance.py \
   .local/phase0/conformance-step11.json
 ```
 
@@ -262,7 +262,7 @@ pixels for physical equality. See
 - [ADR-003: boundaries and refractive index](docs/adr/0003-boundaries-and-refractive-index.md)
 - [ADR-004: Zarr layout and compatibility](docs/adr/0004-zarr-layout-and-compatibility.md)
 - [ADR-005: exporter boundary](docs/adr/0005-exporter-boundary.md)
-- [ADR-006: Phase 1 inputs and voxelization](docs/adr/0006-phase1-inputs-and-voxelization.md)
+- [ADR-006: Phase 1 inputs and voxelization](docs/adr/0006-pipeline-inputs-and-voxelization.md)
 - [ADR-007: pipeline run and artifact bundle](docs/adr/0007-pipeline-run-and-artifact-bundle.md)
 - [ADR-008: CLI contract and failure semantics](docs/adr/0008-cli-contract-and-failure-semantics.md)
 - [ADR-009: input generator contract and external mappings](docs/adr/0009-input-generator-contract-and-external-mappings.md)

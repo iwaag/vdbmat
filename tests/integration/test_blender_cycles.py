@@ -34,7 +34,7 @@ def test_every_fixture_loads_and_renders_without_scene_edits(tmp_path: Path) -> 
             name=fixture.manifest.name,
             config=config,
         )
-    runner = Path("examples/phase0/render_blender_fixtures.py").resolve()
+    runner = Path("examples/native_fixtures/render_blender_fixtures.py").resolve()
     subprocess.run(
         [
             sys.executable,

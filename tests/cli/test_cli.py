@@ -134,7 +134,7 @@ def test_convert_with_external_mapping_file_matches_builtin(
 
 def test_run_and_bundle_inspection(inputs: Path, tmp_path: Path) -> None:
     config = json.loads(
-        (Path("examples/phase1/configs/window_coupon.run.json")).read_text()
+        (Path("examples/pipeline_run/configs/window_coupon.run.json")).read_text()
     )
     config["input"]["path"] = str(inputs / "window_coupon.voxels.json")
     config["output"]["path"] = str(tmp_path / "run output")
@@ -178,7 +178,7 @@ def test_documented_exit_categories(inputs: Path, tmp_path: Path) -> None:
     io_error = _run(
         "import-voxels",
         Path(
-            "examples/phase1/inputs/invalid/window_coupon.bad_checksum.voxels.json"
+            "examples/pipeline_run/inputs/invalid/window_coupon.bad_checksum.voxels.json"
         ).resolve(),
         tmp_path / "bad.zarr",
     )

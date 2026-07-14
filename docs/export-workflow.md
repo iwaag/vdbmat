@@ -46,7 +46,7 @@ package dependency:
 ```bash
 docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp \
   -v "$PWD:/work" -w /work vdbmat-openvdb-cycles:blender4.5.11 \
-  blender --background --python examples/phase0/blender_cycles_volume.py -- \
+  blender --background --python examples/native_fixtures/blender_cycles_volume.py -- \
   .local/window-coupon/exports/openvdb/openvdb-manifest.json \
   .local/window-coupon/exports/openvdb/cycles.png
 ```

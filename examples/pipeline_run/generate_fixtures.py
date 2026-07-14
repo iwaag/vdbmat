@@ -1,12 +1,12 @@
 """Regenerate the committed Phase 1 representative input fixtures.
 
 Deterministic: rerunning this script reproduces byte-identical payloads and expected
-summaries under ``examples/phase1/inputs/``. Intentionally invalid samples for
-error-path tests are written under ``examples/phase1/inputs/invalid/``.
+summaries under ``examples/pipeline_run/inputs/``. Intentionally invalid samples for
+error-path tests are written under ``examples/pipeline_run/inputs/invalid/``.
 
 Usage::
 
-    uv run python examples/phase1/generate_fixtures.py
+    uv run python examples/pipeline_run/generate_fixtures.py
 """
 
 from __future__ import annotations

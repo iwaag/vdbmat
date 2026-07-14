@@ -15,7 +15,7 @@ manually-tuned framing carries over automatically.
 
 Invoke inside Blender's Python (the pinned ``vdbmat-openvdb-cycles`` image):
 
-    blender --background --python examples/phase1/demo/blender_template_swap.py -- \
+    blender --background --python examples/pipeline_run/demo/blender_template_swap.py -- \
         TEMPLATE_BLEND EXTERIOR_PLY OUTPUT_PNG [--target-object exterior-000] \
         [--samples 96]
 

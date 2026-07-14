@@ -17,12 +17,12 @@ docker build -t vdbmat-openvdb-cycles:blender4.5.11 \
 docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp \
   -e PYTHONPATH=/work/src -v "$PWD:/work" -w /work \
   vdbmat-openvdb-cycles:blender4.5.11 \
-  python3 examples/phase0/export_openvdb_fixtures.py \
+  python3 examples/native_fixtures/export_openvdb_fixtures.py \
   .local/openvdb-native
 
 docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp \
   -v "$PWD:/work" -w /work vdbmat-openvdb-cycles:blender4.5.11 \
-  python3 examples/phase0/render_blender_fixtures.py \
+  python3 examples/native_fixtures/render_blender_fixtures.py \
   .local/openvdb-native \
   .local/cycles-native --blender blender
 ```

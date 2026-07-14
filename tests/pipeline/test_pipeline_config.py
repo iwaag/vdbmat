@@ -331,7 +331,7 @@ def test_replace_keeps_config_valid() -> None:
 # -- Committed example configurations stay valid ----------------------------------
 
 EXAMPLE_CONFIGS = (
-    Path(__file__).resolve().parents[2] / "examples" / "phase1" / "configs"
+    Path(__file__).resolve().parents[2] / "examples" / "pipeline_run" / "configs"
 )
 
 

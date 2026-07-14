@@ -86,7 +86,7 @@ Unknown keys anywhere in the document are rejected (strict schema).
 }
 ```
 
-See `examples/phase1/inputs/window_coupon.voxels.json` for a real example (its `.npy`
+See `examples/pipeline_run/inputs/window_coupon.voxels.json` for a real example (its `.npy`
 sits alongside it in the same directory).
 
 ## 5. Self-validation
@@ -133,7 +133,7 @@ Two conveniences for generator authors:
 
 - `docs/adr/0009-input-generator-contract-and-external-mappings.md` — the input
   generator contract and mapping externalization decisions
-- `docs/adr/0006-phase1-inputs-and-voxelization.md` — the formal ADR for the manifest
+- `docs/adr/0006-pipeline-inputs-and-voxelization.md` — the formal ADR for the manifest
 - `docs/material-identity-contract.md` — material naming rules and the two identity layers
 - `docs/schemas/optical-mapping-v1.md` — the external optical-mapping document format
 - `src/vdbmat/io/voxel_manifest.py` — validation implementation (source of truth for behavior)

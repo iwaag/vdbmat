@@ -10,7 +10,7 @@ Requires the OpenVDB Python bindings, so run it inside the pinned native contain
 
     docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -e PYTHONPATH=/work/src \
         -v "$PWD:/work" -w /work vdbmat-openvdb-cycles \
-        python3 tools/phase0/inspect_vdb_grids.py \
+        python3 tools/vdb_inspect/inspect_vdb_grids.py \
         .local/phase1/step10/runs/stepped_wedge/exports/openvdb/openvdb-manifest.json
 
 Accepts either an ``openvdb-manifest.json`` or a ``volume.vdb`` path.

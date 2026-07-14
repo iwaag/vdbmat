@@ -21,7 +21,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 _COMMITTED = (
     _REPO_ROOT
     / "examples"
-    / "phase1"
+    / "pipeline_run"
     / "mappings"
     / "phase0-provisional-materials-v1.optical-mapping.json"
 )

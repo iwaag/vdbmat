@@ -8,7 +8,7 @@
 
 ```bash
 uv sync --locked --group mitsuba
-uv run --group mitsuba python examples/phase0/render_mitsuba_fixtures.py \
+uv run --group mitsuba python examples/native_fixtures/render_mitsuba_fixtures.py \
   .local/mitsuba-fixtures
 ```
 

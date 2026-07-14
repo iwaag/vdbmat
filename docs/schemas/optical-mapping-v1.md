@@ -55,6 +55,6 @@ scientific values; violations are field-oriented failures.
 
 ## Reference document
 
-`examples/phase1/mappings/phase0-provisional-materials-v1.optical-mapping.json`
+`examples/pipeline_run/mappings/phase0-provisional-materials-v1.optical-mapping.json`
 is the builtin Phase 0 mapping in external form; its digest equals the builtin's
 by construction (asserted by `tests/optics/test_mapping_document.py`).

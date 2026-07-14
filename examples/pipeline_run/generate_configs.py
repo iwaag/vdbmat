@@ -1,13 +1,13 @@
 """Regenerate the committed Phase 1 example pipeline run configurations.
 
 Deterministic: rerunning this script reproduces byte-identical, human-reviewable
-``config.json`` documents under ``examples/phase1/configs/``. Paths are portable and
+``config.json`` documents under ``examples/pipeline_run/configs/``. Paths are portable and
 relative to each config file's own directory; ``vdbmat run CONFIG`` resolves them
 against the config's directory (see ADR-007/ADR-008 and plan Step 5).
 
 Usage::
 
-    uv run python examples/phase1/generate_configs.py
+    uv run python examples/pipeline_run/generate_configs.py
 """
 
 from __future__ import annotations

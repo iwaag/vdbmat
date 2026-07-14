@@ -11,14 +11,14 @@ through Zarr, and runs both adapters' pure conversion paths without importing Mi
 OpenVDB, or Blender:
 
 ```bash
-uv run python examples/phase0/check_cross_consumer_conformance.py \
+uv run python examples/native_fixtures/check_cross_consumer_conformance.py \
   .local/conformance.json
 ```
 
 Optional image sanity checks can inspect already generated proof outputs:
 
 ```bash
-uv run python examples/phase0/check_cross_consumer_conformance.py \
+uv run python examples/native_fixtures/check_cross_consumer_conformance.py \
   .local/conformance-with-images.json \
   --mitsuba-renders .local/mitsuba-fixtures \
   --cycles-renders .local/cycles-native \

@@ -28,7 +28,7 @@ from vdbmat.io import read_material_label_manifest
 from vdbmat.io.errors import VoxelManifestError
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
-_INPUTS = _REPO_ROOT / "examples" / "phase1" / "inputs"
+_INPUTS = _REPO_ROOT / "examples" / "pipeline_run" / "inputs"
 
 
 def _committed_summary(name: str) -> dict:

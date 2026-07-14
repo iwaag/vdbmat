@@ -6,7 +6,7 @@ same locked renderer is therefore byte-comparable.
 
 Usage::
 
-    uv run --group mitsuba python examples/phase1/generate_reference_baselines.py \
+    uv run --group mitsuba python examples/pipeline_run/generate_reference_baselines.py \
         .local/phase1/step10
 """
 

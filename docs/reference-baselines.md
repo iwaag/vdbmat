@@ -8,7 +8,7 @@ Generate both canonical run bundles and the primary Mitsuba baselines from a cle
 output directory:
 
 ```bash
-uv run --group mitsuba python examples/phase1/generate_reference_baselines.py \
+uv run --group mitsuba python examples/pipeline_run/generate_reference_baselines.py \
   .local/baselines
 ```
 
@@ -27,7 +27,7 @@ each object's restored `optical.zarr` with the commands in
 [the export workflow](export-workflow.md), then attach the evidence to the manifest:
 
 ```bash
-uv run python examples/phase1/generate_reference_baselines.py \
+uv run python examples/pipeline_run/generate_reference_baselines.py \
   .local/baselines --record-cycles
 ```
 

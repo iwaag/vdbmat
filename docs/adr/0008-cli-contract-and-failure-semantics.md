@@ -181,7 +181,7 @@ human-readable error text is on stderr.
 - **Silent overwrite / inferred units / auto-transpose.** Rejected: each is a named stop
   condition; the CLI must fail loudly instead.
 - **CLI implementing pipeline logic directly.** Rejected: the CLI must call package APIs
-  so `examples/phase1/` is never the only supported entry point and API/CLI stay
+  so `examples/pipeline_run/` is never the only supported entry point and API/CLI stay
   equivalent.
 
 ## Consequences

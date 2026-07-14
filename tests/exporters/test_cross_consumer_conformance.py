@@ -87,7 +87,7 @@ def test_conformance_command_processes_every_fixture(tmp_path: Path) -> None:
     subprocess.run(
         [
             sys.executable,
-            "examples/phase0/check_cross_consumer_conformance.py",
+            "examples/native_fixtures/check_cross_consumer_conformance.py",
             str(report),
         ],
         check=True,
