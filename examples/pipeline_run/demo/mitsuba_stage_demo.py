@@ -22,15 +22,16 @@ Stage construction lives in the sibling module :mod:`mitsuba_stage`
 A stage-config JSON preset (``*.stage.json``, see
 ``examples/pipeline_run/demo/presets/``) can override lights, camera, and
 backdrop/floor patterns; running without one reproduces the built-in defaults.
-Explicit ``--width/--height/--spp/--checker-scale`` arguments win over the
-preset.
+Explicit ``--width/--height/--spp/--max-depth/--checker-scale`` arguments win
+over the preset.
 
 Invoke on the host (no Docker needed for Mitsuba):
 
     uv run --group mitsuba python \
         examples/pipeline_run/demo/mitsuba_stage_demo.py -- \
         OPTICAL_ZARR OUTPUT_PNG [--stage-config PRESET.stage.json] \
-        [--width 512] [--height 512] [--spp 128] [--checker-scale 8]
+        [--width 512] [--height 512] [--spp 128] [--max-depth 8] \
+        [--checker-scale 8]
 
 ``OPTICAL_ZARR`` is an ``optical.zarr`` bundle written by ``vdbmat run``.
 ``OUTPUT_PNG`` is where the rendered PNG is written; the exterior/interior PLY
@@ -89,6 +90,12 @@ def _parse_args() -> argparse.Namespace:
         help="override samples per pixel (default: preset value or 128)",
     )
     parser.add_argument(
+        "--max-depth",
+        type=int,
+        default=None,
+        help="override positive path depth limit (default: preset value or 8)",
+    )
+    parser.add_argument(
         "--checker-scale",
         type=int,
         default=None,
@@ -123,6 +130,7 @@ def main() -> None:
         width=args.width,
         height=args.height,
         spp=args.spp,
+        max_depth=args.max_depth,
         checker_scale=args.checker_scale,
     )
 
@@ -134,6 +142,7 @@ def main() -> None:
         width=stage.render.width,
         height=stage.render.height,
         spp=stage.render.spp,
+        max_depth=stage.render.max_depth,
         variant=args.variant,
     )
     scene_dir = args.output_png.parent / f"{args.output_png.stem}_scene"
@@ -151,7 +160,7 @@ def main() -> None:
 
     pixels = np.asarray(image, dtype=np.float32)
     print(
-        "PIXELSTATS "
+        f"PIXELSTATS max_depth={config.max_depth} "
         f"min={float(np.min(pixels)):.6g} "
         f"max={float(np.max(pixels)):.6g} "
         f"mean={float(np.mean(pixels)):.6g} "

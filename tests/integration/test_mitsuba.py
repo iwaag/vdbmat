@@ -1,3 +1,4 @@
+import json
 from dataclasses import replace
 from pathlib import Path
 
@@ -58,6 +59,18 @@ def test_prepared_scene_has_nearest_raw_grids_and_loads(tmp_path: Path) -> None:
     assert scene is not None
     assert (tmp_path / "capabilities.json").is_file()
     assert (tmp_path / "scene-summary.json").is_file()
+
+
+def test_prepared_scene_records_configured_max_depth(tmp_path: Path) -> None:
+    config = MitsubaExportConfig(width=8, height=8, spp=1, max_depth=14)
+
+    prepared = prepare_mitsuba_scene(
+        _mapped(homogeneous_transparent()), tmp_path, config
+    )
+    summary = json.loads((tmp_path / "scene-summary.json").read_text(encoding="utf-8"))
+
+    assert prepared.scene_dict["integrator"]["max_depth"] == 14
+    assert summary["render"]["max_depth"] == 14
 
 
 @pytest.mark.parametrize("field", ["sigma_a", "sigma_s"])
