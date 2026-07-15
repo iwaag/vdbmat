@@ -26,6 +26,10 @@ dev = [
 mitsuba = [
     "mitsuba>=3.6",
 ]
+mitsuba-viewer = [
+    { include-group = "mitsuba" },
+    "viser>=0.2",
+]
 openvdb = []
 
 [tool.pytest.ini_options]
