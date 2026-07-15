@@ -1,0 +1,18 @@
+{
+  "format": "vdbmat.stage-config",
+  "format_version": "1.0.0",
+  "key_light": {
+    "radiance": [12.0, 11.0, 9.0],
+    "scale_factor": 1.4
+  },
+  "floor": {
+    "pattern": "solid",
+    "color0": [0.25, 0.25, 0.28]
+  },
+  "camera": {
+    "azimuth_deg": -54.0,
+    "elevation_deg": 42.0,
+    "distance_factor": 5.07,
+    "fov_deg": 35.0
+  }
+}
