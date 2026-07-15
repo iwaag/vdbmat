@@ -38,6 +38,7 @@ Invoke on the host (no Docker needed for Mitsuba):
         OPTICAL_ZARR [--stage-config PRESET.stage.json] [--port 8080] \
         [--work-dir DIR] [--preview-size 256] [--preview-spp 16] \
         [--interactive-spp 4] [--settle-delay 0.35] \
+        [--variant llvm_ad_rgb|cuda_ad_rgb] \
         [--preset-out PATH] [--final-out PATH]
 
 ``--work-dir`` (default: a fresh temp directory) receives the PLY/scene
@@ -99,6 +100,12 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--preview-spp", type=int, default=16)
     parser.add_argument("--interactive-spp", type=int, default=4)
     parser.add_argument("--settle-delay", type=float, default=0.35)
+    parser.add_argument(
+        "--variant",
+        choices=("llvm_ad_rgb", "cuda_ad_rgb"),
+        default="llvm_ad_rgb",
+        help="Mitsuba execution backend (default: llvm_ad_rgb, CPU)",
+    )
     parser.add_argument(
         "--preset-out",
         type=Path,
@@ -304,6 +311,7 @@ class StageCore:
         preview_size: int,
         preview_spp: int,
         initial: StageConfig,
+        variant: str = "llvm_ad_rgb",
     ) -> None:
         volume = read_volume(optical_zarr)
         if not isinstance(volume, OpticalPropertyVolume):
@@ -315,10 +323,13 @@ class StageCore:
             width=preview_size, height=preview_size, spp=preview_spp
         )
         self._seed = MitsubaExportConfig().seed
-        self.mi = _load_mitsuba(MitsubaExportConfig().variant)
+        self.mi = _load_mitsuba(variant)
 
         preview_config = MitsubaExportConfig(
-            width=preview_size, height=preview_size, spp=preview_spp
+            width=preview_size,
+            height=preview_size,
+            spp=preview_spp,
+            variant=variant,
         )
         self._base_preview = prepare_mitsuba_scene(
             volume, work_dir / "preview_scene", config=preview_config
@@ -339,7 +350,10 @@ class StageCore:
         if self._final_res == (render.width, render.height):
             return
         config = MitsubaExportConfig(
-            width=render.width, height=render.height, spp=render.spp
+            width=render.width,
+            height=render.height,
+            spp=render.spp,
+            variant=self.mi.variant(),
         )
         self._base_final = prepare_mitsuba_scene(
             self.volume, self.work_dir / "final_scene", config=config
@@ -824,6 +838,7 @@ class ViewerApp:
             preview_size=args.preview_size,
             preview_spp=args.preview_spp,
             initial=initial,
+            variant=args.variant,
         )
         self.interactive_spp = args.interactive_spp
         self.worker = RenderWorker(settle_delay=args.settle_delay)

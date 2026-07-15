@@ -95,6 +95,12 @@ def _parse_args() -> argparse.Namespace:
         help="override the number of checkerboard tiles across both stage "
         "planes (default: preset value or 8)",
     )
+    parser.add_argument(
+        "--variant",
+        choices=("llvm_ad_rgb", "cuda_ad_rgb"),
+        default="llvm_ad_rgb",
+        help="Mitsuba execution backend (default: llvm_ad_rgb, CPU)",
+    )
     return parser.parse_args(argv)
 
 
@@ -125,7 +131,10 @@ def main() -> None:
         raise SystemExit(f"{args.optical_zarr} is not an optical property volume")
 
     config = MitsubaExportConfig(
-        width=stage.render.width, height=stage.render.height, spp=stage.render.spp
+        width=stage.render.width,
+        height=stage.render.height,
+        spp=stage.render.spp,
+        variant=args.variant,
     )
     scene_dir = args.output_png.parent / f"{args.output_png.stem}_scene"
     prepared = prepare_mitsuba_scene(volume, scene_dir, config=config)
