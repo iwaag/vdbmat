@@ -8,16 +8,18 @@ is a pure consumer of the Phase-1 contract in :mod:`mitsuba_stage`: it edits a
 ``*.stage.json`` preset (replayable headlessly with
 ``mitsuba_stage_demo.py --stage-config``) and a final PNG.
 
-Architecture (see .devdocs/vision/mitsuba_gui/p2/plan.md):
+Architecture (see .devdocs/vision/mitsuba_gui/p3/plan.md):
 
 - ``prepare_mitsuba_scene()`` runs exactly twice at startup — once with a
   low-resolution preview sensor, once at the final resolution — so the heavy
   boundary-mesh extraction and PLY writing never sit inside the parameter
-  loop. Each re-render is only: shallow-copy the prepared ``scene_dict``,
-  ``apply_stage()``, ``mi.load_dict()``, ``mi.render()``.
-- All renders (previews and final) run on one worker thread, latest-wins with
-  a debounce, so Mitsuba never renders concurrently and dragging a slider
-  only renders the newest value.
+  loop. The final scene is rebuilt only when its requested resolution changes.
+- The preview scene stays loaded. Continuous changes update explicit
+  ``mi.traverse()`` keys; graph changes (enabled/pattern/override toggles)
+  rebuild through ``apply_stage()`` and then resume traversed updates.
+- All renders run on one worker thread. A change produces a low-spp
+  interactive image immediately and a settled high-spp image after the input
+  goes quiet. Generation guards prevent stale renders from reaching the GUI.
 - Preview renders swap the config's ``render`` section for the preview
   resolution before calling ``apply_stage``, so a camera override previews at
   preview resolution while "Render final" and the saved preset keep the real
@@ -35,6 +37,7 @@ Invoke on the host (no Docker needed for Mitsuba):
         examples/pipeline_run/demo/mitsuba_stage_viewer.py -- \
         OPTICAL_ZARR [--stage-config PRESET.stage.json] [--port 8080] \
         [--work-dir DIR] [--preview-size 256] [--preview-spp 16] \
+        [--interactive-spp 4] [--settle-delay 0.35] \
         [--preset-out PATH] [--final-out PATH]
 
 ``--work-dir`` (default: a fresh temp directory) receives the PLY/scene
@@ -94,6 +97,8 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--preview-size", type=int, default=256)
     parser.add_argument("--preview-spp", type=int, default=16)
+    parser.add_argument("--interactive-spp", type=int, default=4)
+    parser.add_argument("--settle-delay", type=float, default=0.35)
     parser.add_argument(
         "--preset-out",
         type=Path,
@@ -106,7 +111,16 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=None,
         help="default path for 'Render final' (default: WORK_DIR/final.png)",
     )
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    if args.preview_size <= 0 or args.preview_spp <= 0:
+        parser.error("--preview-size and --preview-spp must be > 0")
+    if args.interactive_spp <= 0:
+        parser.error("--interactive-spp must be > 0")
+    if args.interactive_spp > args.preview_spp:
+        parser.error("--interactive-spp must be <= --preview-spp")
+    if args.settle_delay < 0.0:
+        parser.error("--settle-delay must be >= 0")
+    return args
 
 
 def _load_mitsuba(variant: str) -> ModuleType:
@@ -125,6 +139,155 @@ def _pixel_stats(pixels: np.ndarray) -> str:
         f"mean={float(np.mean(pixels)):.6g} "
         f"std={float(np.std(pixels)):.6g}"
     )
+
+
+StructureKey = tuple[bool, str, bool, str, bool, bool, bool]
+
+
+def _structure_key(config: StageConfig) -> StructureKey:
+    return (
+        config.backdrop.enabled,
+        config.backdrop.pattern,
+        config.floor.enabled,
+        config.floor.pattern,
+        config.key_light.enabled,
+        config.camera is not None,
+        config.backlight is not None,
+    )
+
+
+def _nested(mapping: dict[str, object], path: str) -> object:
+    value: object = mapping
+    for component in path.split("."):
+        if not isinstance(value, dict) or component not in value:
+            raise KeyError(path)
+        value = value[component]
+    return value
+
+
+class TraversedPreviewScene:
+    """A loaded preview scene updated through an explicit traverse mapping."""
+
+    def __init__(self, mi, base, geometry, initial: StageConfig, seed: int) -> None:
+        self.mi = mi
+        self.base = base
+        self.geometry = geometry
+        self.seed = seed
+        self.scene = None
+        self.params = None
+        self.config: StageConfig | None = None
+        self.rebuild(initial)
+
+    def _stage_dict(self, config: StageConfig) -> dict[str, object]:
+        scene_dict = dict(self.base.scene_dict)
+        apply_stage(self.mi, scene_dict, self.geometry, config)
+        return scene_dict
+
+    def rebuild(self, config: StageConfig) -> None:
+        self.scene = self.mi.load_dict(self._stage_dict(config))
+        self.params = self.mi.traverse(self.scene)
+        self.config = config
+
+    def _set(self, key: str, value: object) -> None:
+        assert self.params is not None
+        if key not in self.params:
+            raise KeyError(f"traverse key unavailable: {key}")
+        self.params[key] = value
+
+    def _apply_continuous(self, config: StageConfig) -> None:
+        assert self.config is not None
+        candidate = self._stage_dict(config)
+        old = self.config
+
+        for name, section in (
+            ("stage_backdrop", config.backdrop),
+            ("stage_floor", config.floor),
+        ):
+            if not section.enabled:
+                continue
+            old_section = old.backdrop if name == "stage_backdrop" else old.floor
+            if section.pattern == "checker":
+                if section.color0 != old_section.color0:
+                    self._set(
+                        f"{name}.bsdf.reflectance.color0.value", section.color0
+                    )
+                if section.color1 != old_section.color1:
+                    self._set(
+                        f"{name}.bsdf.reflectance.color1.value", section.color1
+                    )
+                if section.checker_scale != old_section.checker_scale:
+                    transform = self.mi.ScalarTransform3f.scale(
+                        [float(section.checker_scale), float(section.checker_scale)]
+                    )
+                    self._set(f"{name}.bsdf.reflectance.to_uv", transform)
+            elif section.color0 != old_section.color0:
+                self._set(f"{name}.bsdf.reflectance.value", section.color0)
+
+        transform_fields = (
+            (
+                "stage_backdrop",
+                config.backdrop.enabled
+                and (
+                    config.backdrop.distance_factor != old.backdrop.distance_factor
+                    or config.backdrop.scale_factor != old.backdrop.scale_factor
+                ),
+            ),
+            (
+                "stage_floor",
+                config.floor.enabled
+                and (
+                    config.floor.drop_factor != old.floor.drop_factor
+                    or config.floor.scale_factor != old.floor.scale_factor
+                ),
+            ),
+            (
+                "stage_key_light",
+                config.key_light.enabled
+                and (
+                    config.key_light.direction != old.key_light.direction
+                    or config.key_light.distance_factor
+                    != old.key_light.distance_factor
+                    or config.key_light.scale_factor != old.key_light.scale_factor
+                ),
+            ),
+        )
+        for name, changed in transform_fields:
+            if changed:
+                self._set(f"{name}.to_world", _nested(candidate, f"{name}.to_world"))
+
+        if (
+            config.key_light.enabled
+            and config.key_light.radiance != old.key_light.radiance
+        ):
+            self._set(
+                "stage_key_light.emitter.radiance.value", config.key_light.radiance
+            )
+        if config.backlight is not None and config.backlight != old.backlight:
+            self._set("backlight.emitter.radiance.value", config.backlight.radiance)
+        if config.camera is not None and config.camera != old.camera:
+            self._set("sensor.to_world", _nested(candidate, "sensor.to_world"))
+            if config.camera.fov_deg != old.camera.fov_deg:
+                self._set("sensor.x_fov", float(config.camera.fov_deg))
+
+        assert self.params is not None
+        self.params.update()
+        self.config = config
+
+    def render(self, config: StageConfig, spp: int) -> tuple[np.ndarray, str]:
+        route = "traverse"
+        assert self.config is not None
+        if _structure_key(config) != _structure_key(self.config):
+            self.rebuild(config)
+            route = "rebuild"
+        elif config != self.config:
+            try:
+                self._apply_continuous(config)
+            except (KeyError, TypeError, RuntimeError, ValueError) as error:
+                print(f"TRAVERSE FALLBACK {error}", file=sys.stderr)
+                self.rebuild(config)
+                route = "rebuild-fallback"
+        assert self.scene is not None
+        return self.mi.render(self.scene, seed=self.seed, spp=spp), route
 
 
 class StageCore:
@@ -160,6 +323,14 @@ class StageCore:
         self._base_preview = prepare_mitsuba_scene(
             volume, work_dir / "preview_scene", config=preview_config
         )
+        preview_initial = replace(initial, render=self._preview_render)
+        self._preview_scene = TraversedPreviewScene(
+            self.mi,
+            self._base_preview,
+            self.volume.geometry,
+            preview_initial,
+            self._seed,
+        )
         self._base_final = None
         self._final_res: tuple[int, int] | None = None
         self._ensure_final(initial.render)
@@ -181,13 +352,17 @@ class StageCore:
         scene = self.mi.load_dict(scene_dict)
         return self.mi.render(scene, seed=self._seed, spp=spp)
 
-    def render_preview(self, config: StageConfig) -> tuple[np.ndarray, str]:
-        """Render at preview resolution; returns (uint8 sRGB image, stats)."""
+    def render_preview(
+        self, config: StageConfig, spp: int | None = None
+    ) -> tuple[np.ndarray, str, str]:
+        """Render a preview; return (uint8 sRGB image, stats, update route)."""
         preview_config = replace(config, render=self._preview_render)
-        image = self._render(self._base_preview, preview_config, self.preview_spp)
+        image, route = self._preview_scene.render(
+            preview_config, self.preview_spp if spp is None else spp
+        )
         stats = _pixel_stats(np.asarray(image, dtype=np.float32))
         bitmap = self.mi.util.convert_to_bitmap(image)
-        return np.asarray(bitmap), stats
+        return np.asarray(bitmap), stats, route
 
     def render_final(self, config: StageConfig, output_png: Path) -> str:
         """Render at the config's full resolution/spp and write the PNG."""
@@ -208,61 +383,90 @@ class StageCore:
 
 
 class RenderWorker(threading.Thread):
-    """Single render thread: latest-wins preview slot plus a job queue."""
+    """Single worker: immediate coarse preview, then latest settled preview."""
 
-    def __init__(self, debounce_seconds: float = 0.35) -> None:
+    def __init__(self, settle_delay: float = 0.35) -> None:
         super().__init__(daemon=True)
-        self._lock = threading.Lock()
-        self._wake = threading.Event()
-        self._pending_preview: StageConfig | None = None
-        self._preview_fn: Callable[[StageConfig], None] | None = None
+        self._condition = threading.Condition()
+        self._pending_preview: tuple[int, StageConfig] | None = None
+        self._generation = 0
+        self._preview_fn: Callable[[StageConfig, str], object] | None = None
+        self._publish_fn: Callable[[object, str], None] | None = None
         self._jobs: list[Callable[[], None]] = []
-        self._debounce = debounce_seconds
+        self._settle_delay = settle_delay
         self._on_error: Callable[[str], None] = lambda message: print(
             f"RENDER ERROR {message}", file=sys.stderr
         )
 
     def configure(
         self,
-        preview_fn: Callable[[StageConfig], None],
+        preview_fn: Callable[[StageConfig, str], object],
+        publish_fn: Callable[[object, str], None],
         on_error: Callable[[str], None],
     ) -> None:
         self._preview_fn = preview_fn
+        self._publish_fn = publish_fn
         self._on_error = on_error
 
-    def request_preview(self, config: StageConfig) -> None:
-        with self._lock:
-            self._pending_preview = config
-            self._wake.set()
+    def request_preview(self, config: StageConfig) -> int:
+        with self._condition:
+            self._generation += 1
+            self._pending_preview = (self._generation, config)
+            self._condition.notify()
+            return self._generation
 
     def submit(self, job: Callable[[], None]) -> None:
-        with self._lock:
+        with self._condition:
             self._jobs.append(job)
-            self._wake.set()
+            self._condition.notify()
+
+    def _publish(self, result: object, quality: str, generation: int) -> None:
+        with self._condition:
+            current = self._generation
+        if generation == current and self._publish_fn is not None:
+            self._publish_fn(result, quality)
 
     def run(self) -> None:
         while True:
-            self._wake.wait()
-            with self._lock:
-                job = self._jobs.pop(0) if self._jobs else None
-            if job is None:
-                # Debounce the preview slot so a slider drag renders once.
-                time.sleep(self._debounce)
-                with self._lock:
-                    config = self._pending_preview
+            with self._condition:
+                self._condition.wait_for(
+                    lambda: bool(self._jobs) or self._pending_preview is not None
+                )
+                if self._jobs:
+                    job = self._jobs.pop(0)
+                    preview = None
+                else:
+                    job = None
+                    preview = self._pending_preview
                     self._pending_preview = None
-                    if not self._jobs and self._pending_preview is None:
-                        self._wake.clear()
-                if config is None or self._preview_fn is None:
-                    continue
-
-                def job(
-                    config: StageConfig = config,
-                    preview_fn: Callable[[StageConfig], None] = self._preview_fn,
-                ) -> None:
-                    preview_fn(config)
             try:
-                job()
+                if job is not None:
+                    job()
+                    continue
+                if preview is None or self._preview_fn is None:
+                    continue
+                generation, config = preview
+                result = self._preview_fn(config, "interactive")
+                self._publish(result, "interactive", generation)
+                deadline = time.monotonic() + self._settle_delay
+                with self._condition:
+                    while (
+                        self._pending_preview is None
+                        and not self._jobs
+                        and self._generation == generation
+                    ):
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0.0:
+                            break
+                        self._condition.wait(remaining)
+                    settled = (
+                        self._pending_preview is None
+                        and not self._jobs
+                        and self._generation == generation
+                    )
+                if settled:
+                    result = self._preview_fn(config, "settled")
+                    self._publish(result, "settled", generation)
             except Exception:
                 self._on_error(traceback.format_exc(limit=3))
 
@@ -621,7 +825,8 @@ class ViewerApp:
             preview_spp=args.preview_spp,
             initial=initial,
         )
-        self.worker = RenderWorker()
+        self.interactive_spp = args.interactive_spp
+        self.worker = RenderWorker(settle_delay=args.settle_delay)
         self.server = viser.ViserServer(host="127.0.0.1", port=args.port)
         gui = self.server.gui
 
@@ -642,7 +847,9 @@ class ViewerApp:
         save_button.on_click(lambda _event: self._save_preset())
         render_button.on_click(lambda _event: self._queue_final())
 
-        self.worker.configure(self._render_preview, self._show_error)
+        self.worker.configure(
+            self._render_preview, self._publish_preview, self._show_error
+        )
         self.worker.start()
         self._schedule_preview()
 
@@ -652,12 +859,21 @@ class ViewerApp:
         self.status.content = "rendering preview…"
         self.worker.request_preview(self.binder.current())
 
-    def _render_preview(self, config: StageConfig) -> None:
+    def _render_preview(
+        self, config: StageConfig, quality: str
+    ) -> tuple[np.ndarray, str, str, float]:
         started = time.perf_counter()
-        pixels, stats = self.core.render_preview(config)
+        spp = self.interactive_spp if quality == "interactive" else None
+        pixels, stats, route = self.core.render_preview(config, spp=spp)
         elapsed = time.perf_counter() - started
+        return pixels, stats, route, elapsed
+
+    def _publish_preview(self, result: object, quality: str) -> None:
+        pixels, stats, route, elapsed = result
         self.image.image = pixels
-        self.status.content = f"preview {elapsed:.2f}s — PIXELSTATS {stats}"
+        self.status.content = (
+            f"preview {quality}/{route} {elapsed:.2f}s — PIXELSTATS {stats}"
+        )
 
     def _save_preset(self) -> None:
         path = Path(self.preset_path.value)
