@@ -9,10 +9,10 @@ It holds two things:
 
 1. :class:`StageConfig` — a JSON round-trippable description of the legible
    stage added around the canonical scene: checkerboard backdrop and floor
-   planes, an oblique key light, render resolution/spp, and optional overrides
-   for the canonical sensor and backlight. Every default equals the value that
-   was previously hardcoded in ``mitsuba_stage_demo.py``, so a default
-   ``StageConfig()`` reproduces the pre-refactor image exactly.
+   planes, an oblique key light, render resolution/spp/max depth, and optional
+   overrides for the canonical sensor and backlight. Every default equals the
+   value that was previously hardcoded in ``mitsuba_stage_demo.py``, so a
+   default ``StageConfig()`` reproduces the pre-refactor image exactly.
 2. :func:`apply_stage` — a function that adds those stage entries to the
    ``scene_dict`` returned by ``prepare_mitsuba_scene()``. The canonical
    entries (medium, exterior/interior meshes, sensor, backlight) are left
@@ -22,11 +22,13 @@ It holds two things:
 
 Stage-config JSON files (``*.stage.json``) carry a format header::
 
-    {"format": "vdbmat.stage-config", "format_version": "1.0.0", ...}
+    {"format": "vdbmat.stage-config", "format_version": "1.1.0", ...}
 
 Sections and fields may be given partially; anything omitted keeps its
 default. Unknown keys, wrong types, and out-of-range values are rejected
-explicitly rather than ignored.
+explicitly rather than ignored. Readers also accept legacy version ``1.0.0``;
+that version does not allow ``render.max_depth`` and supplies the default value
+8 when loaded.
 
 Camera-override convention (only used when ``camera`` is non-null): the
 direction from the object to the camera is built from ``azimuth_deg``
@@ -53,7 +55,8 @@ import numpy as np
 from vdbmat.core.geometry import GridGeometry
 
 STAGE_CONFIG_FORMAT = "vdbmat.stage-config"
-STAGE_CONFIG_FORMAT_VERSION = "1.0.0"
+STAGE_CONFIG_FORMAT_VERSION = "1.1.0"
+STAGE_CONFIG_ACCEPTED_VERSIONS = frozenset({"1.0.0", STAGE_CONFIG_FORMAT_VERSION})
 
 _PATTERNS = ("checker", "solid")
 
@@ -117,14 +120,15 @@ def _check_pattern(name: str, value: object) -> str:
 
 @dataclass(frozen=True)
 class RenderSettings:
-    """Demo render resolution and sample count."""
+    """Demo render resolution, sample count, and positive path-depth limit."""
 
     width: int = 512
     height: int = 512
     spp: int = 128
+    max_depth: int = 8
 
     def __post_init__(self) -> None:
-        for name in ("width", "height", "spp"):
+        for name in ("width", "height", "spp", "max_depth"):
             _check_positive_int(f"render.{name}", getattr(self, name))
 
 
@@ -255,13 +259,19 @@ class StageConfig:
         width: int | None = None,
         height: int | None = None,
         spp: int | None = None,
+        max_depth: int | None = None,
         checker_scale: int | None = None,
     ) -> StageConfig:
         """Apply explicit CLI arguments on top of this config (CLI wins)."""
         config = self
         render_updates = {
             name: value
-            for name, value in (("width", width), ("height", height), ("spp", spp))
+            for name, value in (
+                ("width", width),
+                ("height", height),
+                ("spp", spp),
+                ("max_depth", max_depth),
+            )
             if value is not None
         }
         if render_updates:
@@ -287,10 +297,20 @@ _OVERRIDE_TYPES: dict[str, type] = {
 }
 
 
-def _section_from_dict(cls: type, data: object, section: str) -> Any:
+def _section_from_dict(
+    cls: type,
+    data: object,
+    section: str,
+    *,
+    allowed_fields: set[str] | None = None,
+) -> Any:
     if not isinstance(data, dict):
         raise StageConfigError(f"section {section!r} must be an object")
-    known = {f.name for f in fields(cls)}
+    known = (
+        allowed_fields
+        if allowed_fields is not None
+        else {f.name for f in fields(cls)}
+    )
     unknown = set(data) - known
     if unknown:
         raise StageConfigError(
@@ -311,10 +331,11 @@ def stage_config_from_dict(document: object) -> StageConfig:
         raise StageConfigError(
             f"format must be {STAGE_CONFIG_FORMAT!r}, got {document.get('format')!r}"
         )
-    if document.get("format_version") != STAGE_CONFIG_FORMAT_VERSION:
+    version = document.get("format_version")
+    if version not in STAGE_CONFIG_ACCEPTED_VERSIONS:
         raise StageConfigError(
-            "format_version must be "
-            f"{STAGE_CONFIG_FORMAT_VERSION!r}, got {document.get('format_version')!r}"
+            "format_version must be one of "
+            f"{sorted(STAGE_CONFIG_ACCEPTED_VERSIONS)!r}, got {version!r}"
         )
     known = {"format", "format_version", *_SECTION_TYPES, *_OVERRIDE_TYPES}
     unknown = set(document) - known
@@ -324,7 +345,15 @@ def stage_config_from_dict(document: object) -> StageConfig:
     kwargs: dict[str, Any] = {}
     for section, cls in _SECTION_TYPES.items():
         if section in document:
-            kwargs[section] = _section_from_dict(cls, document[section], section)
+            allowed_fields = None
+            if section == "render" and version == "1.0.0":
+                allowed_fields = {"width", "height", "spp"}
+            kwargs[section] = _section_from_dict(
+                cls,
+                document[section],
+                section,
+                allowed_fields=allowed_fields,
+            )
     for section, cls in _OVERRIDE_TYPES.items():
         if section in document and document[section] is not None:
             kwargs[section] = _section_from_dict(cls, document[section], section)
