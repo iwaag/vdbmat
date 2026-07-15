@@ -13,17 +13,18 @@ Architecture (see .devdocs/vision/mitsuba_gui/p3/plan.md):
 - ``prepare_mitsuba_scene()`` runs exactly twice at startup — once with a
   low-resolution preview sensor, once at the final resolution — so the heavy
   boundary-mesh extraction and PLY writing never sit inside the parameter
-  loop. The final scene is rebuilt only when its requested resolution changes.
+  loop. The final scene is rebuilt only when its requested resolution or
+  max depth changes.
 - The preview scene stays loaded. Continuous changes update explicit
   ``mi.traverse()`` keys; graph changes (enabled/pattern/override toggles)
   rebuild through ``apply_stage()`` and then resume traversed updates.
 - All renders run on one worker thread. A change produces a low-spp
   interactive image immediately and a settled high-spp image after the input
   goes quiet. Generation guards prevent stale renders from reaching the GUI.
-- Preview renders swap the config's ``render`` section for the preview
-  resolution before calling ``apply_stage``, so a camera override previews at
-  preview resolution while "Render final" and the saved preset keep the real
-  ``render`` settings. Final renders use the same width/height/spp/seed as the
+- Preview renders override only width/height/spp before calling
+  ``apply_stage``; max depth remains the configured transport setting. A depth
+  change is a planned scene rebuild because Mitsuba does not expose it through
+  traversal. Final renders use the same width/height/spp/max depth/seed as the
   headless demo, so a saved preset reproduces the final PNG pixel-identically.
 - GUI decompositions (radiance = colour picker x intensity slider, key-light
   direction = azimuth/elevation sliders) exist only inside the GUI. The saved
@@ -139,8 +140,9 @@ def _load_mitsuba(variant: str) -> ModuleType:
     return mi
 
 
-def _pixel_stats(pixels: np.ndarray) -> str:
+def _pixel_stats(pixels: np.ndarray, max_depth: int) -> str:
     return (
+        f"max_depth={max_depth} "
         f"min={float(np.min(pixels)):.6g} "
         f"max={float(np.max(pixels)):.6g} "
         f"mean={float(np.mean(pixels)):.6g} "
@@ -148,7 +150,8 @@ def _pixel_stats(pixels: np.ndarray) -> str:
     )
 
 
-StructureKey = tuple[bool, str, bool, str, bool, bool, bool]
+StructureKey = tuple[bool, str, bool, str, bool, bool, bool, int]
+FinalRenderKey = tuple[int, int, int]
 
 
 def _structure_key(config: StageConfig) -> StructureKey:
@@ -160,7 +163,25 @@ def _structure_key(config: StageConfig) -> StructureKey:
         config.key_light.enabled,
         config.camera is not None,
         config.backlight is not None,
+        config.render.max_depth,
     )
+
+
+def _preview_stage_config(
+    config: StageConfig, preview_size: int, preview_spp: int
+) -> StageConfig:
+    """Override preview sampling fields while preserving render transport."""
+    render = replace(
+        config.render,
+        width=preview_size,
+        height=preview_size,
+        spp=preview_spp,
+    )
+    return replace(config, render=render)
+
+
+def _final_render_key(render: RenderSettings) -> FinalRenderKey:
+    return render.width, render.height, render.max_depth
 
 
 def _nested(mapping: dict[str, object], path: str) -> object:
@@ -187,6 +208,13 @@ class TraversedPreviewScene:
 
     def _stage_dict(self, config: StageConfig) -> dict[str, object]:
         scene_dict = dict(self.base.scene_dict)
+        integrator = scene_dict.get("integrator")
+        if not isinstance(integrator, dict):
+            raise TypeError("base scene has no integrator dict")
+        scene_dict["integrator"] = {
+            **integrator,
+            "max_depth": config.render.max_depth,
+        }
         apply_stage(self.mi, scene_dict, self.geometry, config)
         return scene_dict
 
@@ -318,10 +346,8 @@ class StageCore:
             raise SystemExit(f"{optical_zarr} is not an optical property volume")
         self.volume = volume
         self.work_dir = work_dir
+        self.preview_size = preview_size
         self.preview_spp = preview_spp
-        self._preview_render = RenderSettings(
-            width=preview_size, height=preview_size, spp=preview_spp
-        )
         self._seed = MitsubaExportConfig().seed
         self.mi = _load_mitsuba(variant)
 
@@ -329,12 +355,13 @@ class StageCore:
             width=preview_size,
             height=preview_size,
             spp=preview_spp,
+            max_depth=initial.render.max_depth,
             variant=variant,
         )
         self._base_preview = prepare_mitsuba_scene(
             volume, work_dir / "preview_scene", config=preview_config
         )
-        preview_initial = replace(initial, render=self._preview_render)
+        preview_initial = _preview_stage_config(initial, preview_size, preview_spp)
         self._preview_scene = TraversedPreviewScene(
             self.mi,
             self._base_preview,
@@ -343,22 +370,24 @@ class StageCore:
             self._seed,
         )
         self._base_final = None
-        self._final_res: tuple[int, int] | None = None
+        self._final_key: FinalRenderKey | None = None
         self._ensure_final(initial.render)
 
     def _ensure_final(self, render: RenderSettings) -> None:
-        if self._final_res == (render.width, render.height):
+        final_key = _final_render_key(render)
+        if self._final_key == final_key:
             return
         config = MitsubaExportConfig(
             width=render.width,
             height=render.height,
             spp=render.spp,
+            max_depth=render.max_depth,
             variant=self.mi.variant(),
         )
         self._base_final = prepare_mitsuba_scene(
             self.volume, self.work_dir / "final_scene", config=config
         )
-        self._final_res = (render.width, render.height)
+        self._final_key = final_key
 
     def _render(self, base, config: StageConfig, spp: int) -> np.ndarray:
         scene_dict = dict(base.scene_dict)
@@ -370,11 +399,15 @@ class StageCore:
         self, config: StageConfig, spp: int | None = None
     ) -> tuple[np.ndarray, str, str]:
         """Render a preview; return (uint8 sRGB image, stats, update route)."""
-        preview_config = replace(config, render=self._preview_render)
+        preview_config = _preview_stage_config(
+            config, self.preview_size, self.preview_spp
+        )
         image, route = self._preview_scene.render(
             preview_config, self.preview_spp if spp is None else spp
         )
-        stats = _pixel_stats(np.asarray(image, dtype=np.float32))
+        stats = _pixel_stats(
+            np.asarray(image, dtype=np.float32), preview_config.render.max_depth
+        )
         bitmap = self.mi.util.convert_to_bitmap(image)
         return np.asarray(bitmap), stats, route
 
@@ -384,7 +417,9 @@ class StageCore:
         image = self._render(self._base_final, config, config.render.spp)
         output_png.parent.mkdir(parents=True, exist_ok=True)
         self.mi.util.write_bitmap(str(output_png), image, write_async=False)
-        return _pixel_stats(np.asarray(image, dtype=np.float32))
+        return _pixel_stats(
+            np.asarray(image, dtype=np.float32), config.render.max_depth
+        )
 
     @staticmethod
     def save_preset(config: StageConfig, path: Path) -> None:

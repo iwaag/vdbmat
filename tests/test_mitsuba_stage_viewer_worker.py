@@ -10,11 +10,14 @@ import numpy as np
 DEMO_DIR = Path(__file__).parents[1] / "examples" / "pipeline_run" / "demo"
 sys.path.insert(0, str(DEMO_DIR))
 
-from mitsuba_stage import StageConfig  # noqa: E402
+from mitsuba_stage import RenderSettings, StageConfig  # noqa: E402
 from mitsuba_stage_viewer import (  # noqa: E402
     RenderWorker,
+    _final_render_key,
     _fit_preview_to_aspect,
     _parse_args,
+    _preview_stage_config,
+    _structure_key,
 )
 
 
@@ -137,3 +140,26 @@ def test_preview_is_padded_to_wide_and_tall_viewports_without_distortion() -> No
     assert np.array_equal(tall[2:6], pixels)
     assert not np.any(tall[:2])
     assert not np.any(tall[6:])
+
+
+def test_preview_override_preserves_max_depth() -> None:
+    config = StageConfig(
+        render=RenderSettings(width=640, height=480, spp=64, max_depth=18)
+    )
+
+    preview = _preview_stage_config(config, preview_size=192, preview_spp=4)
+
+    assert preview.render == RenderSettings(
+        width=192, height=192, spp=4, max_depth=18
+    )
+    assert config.render == RenderSettings(
+        width=640, height=480, spp=64, max_depth=18
+    )
+
+
+def test_max_depth_changes_structure_and_final_cache_keys() -> None:
+    depth8 = StageConfig(render=RenderSettings(max_depth=8))
+    depth16 = StageConfig(render=RenderSettings(max_depth=16))
+
+    assert _structure_key(depth8) != _structure_key(depth16)
+    assert _final_render_key(depth8.render) != _final_render_key(depth16.render)
