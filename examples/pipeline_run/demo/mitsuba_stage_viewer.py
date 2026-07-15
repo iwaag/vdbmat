@@ -612,6 +612,13 @@ class StageBinder:
                 "height", base.render.height, min=16, max=4096, step=16
             )
             self.spp = gui.add_number("spp", base.render.spp, min=1, max=4096, step=1)
+            self.max_depth = gui.add_number(
+                "max depth",
+                base.render.max_depth,
+                min=1,
+                step=1,
+                hint="Higher values allow longer light paths and can render slower.",
+            )
         with self.tabs.add_tab("Backdrop"):
             self.backdrop_enabled = gui.add_checkbox(
                 "enabled", base.backdrop.enabled
@@ -710,7 +717,7 @@ class StageBinder:
             )
 
         for handle in (
-            self.width, self.height, self.spp,
+            self.width, self.height, self.spp, self.max_depth,
             self.backdrop_enabled, self.backdrop_pattern,
             self.floor_enabled, self.floor_pattern,
             self.key_enabled, self.camera_enabled, self.backlight_enabled,
@@ -803,6 +810,7 @@ class StageBinder:
                 width=int(self.width.value),
                 height=int(self.height.value),
                 spp=int(self.spp.value),
+                max_depth=int(self.max_depth.value),
             ),
             backdrop=BackdropSettings(
                 enabled=self.backdrop_enabled.value,

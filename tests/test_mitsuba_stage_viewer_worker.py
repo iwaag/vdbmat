@@ -4,21 +4,87 @@ import sys
 import threading
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 
 DEMO_DIR = Path(__file__).parents[1] / "examples" / "pipeline_run" / "demo"
 sys.path.insert(0, str(DEMO_DIR))
 
-from mitsuba_stage import RenderSettings, StageConfig  # noqa: E402
+from mitsuba_stage import (  # noqa: E402
+    RenderSettings,
+    StageConfig,
+    stage_config_from_json,
+)
 from mitsuba_stage_viewer import (  # noqa: E402
     RenderWorker,
+    StageBinder,
+    StageCore,
     _final_render_key,
     _fit_preview_to_aspect,
     _parse_args,
     _preview_stage_config,
     _structure_key,
 )
+
+
+class _FakeHandle:
+    def __init__(self, value: object) -> None:
+        self.value = value
+        self.callbacks = []
+
+    def on_update(self, callback):  # type: ignore[no-untyped-def]
+        self.callbacks.append(callback)
+
+    def set_value(self, value: object) -> None:
+        self.value = value
+        for callback in self.callbacks:
+            callback(None)
+
+
+class _FakeTab:
+    def __enter__(self) -> _FakeTab:
+        return self
+
+    def __exit__(self, *_args: object) -> None:
+        pass
+
+
+class _FakeTabs:
+    def add_tab(self, _label: str) -> _FakeTab:
+        return _FakeTab()
+
+
+class _FakeGui:
+    def __init__(self) -> None:
+        self.number_options: dict[str, dict[str, object]] = {}
+
+    def add_tab_group(self) -> _FakeTabs:
+        return _FakeTabs()
+
+    def add_number(
+        self, label: str, initial_value: object, **options: object
+    ) -> _FakeHandle:
+        self.number_options[label] = options
+        return _FakeHandle(initial_value)
+
+    def add_checkbox(self, _label: str, initial_value: object) -> _FakeHandle:
+        return _FakeHandle(initial_value)
+
+    def add_dropdown(
+        self, _label: str, _options: object, *, initial_value: object
+    ) -> _FakeHandle:
+        return _FakeHandle(initial_value)
+
+    def add_slider(
+        self, _label: str, *, initial_value: object, **_options: object
+    ) -> _FakeHandle:
+        return _FakeHandle(initial_value)
+
+    def add_rgb(
+        self, _label: str, *, initial_value: object
+    ) -> _FakeHandle:
+        return _FakeHandle(initial_value)
 
 
 def _wait_until(predicate, timeout: float = 2.0) -> None:  # type: ignore[no-untyped-def]
@@ -163,3 +229,35 @@ def test_max_depth_changes_structure_and_final_cache_keys() -> None:
 
     assert _structure_key(depth8) != _structure_key(depth16)
     assert _final_render_key(depth8.render) != _final_render_key(depth16.render)
+
+
+def test_stage_binder_max_depth_widget_and_preset_round_trip(
+    tmp_path: Path,
+) -> None:
+    gui = _FakeGui()
+    changes: list[str] = []
+    base = StageConfig(
+        render=RenderSettings(width=320, height=240, spp=32, max_depth=13)
+    )
+    binder = StageBinder(
+        SimpleNamespace(gui=gui), base, lambda: changes.append("changed")
+    )
+
+    assert binder.max_depth.value == 13
+    assert gui.number_options["max depth"]["min"] == 1
+    assert gui.number_options["max depth"]["step"] == 1
+    assert "max" not in gui.number_options["max depth"]
+    assert binder.current() == base
+
+    binder.max_depth.set_value(21)
+    current = binder.current()
+
+    assert changes == ["changed"]
+    assert current.render == RenderSettings(
+        width=320, height=240, spp=32, max_depth=21
+    )
+
+    preset_path = tmp_path / "viewer.stage.json"
+    StageCore.save_preset(current, preset_path)
+
+    assert stage_config_from_json(preset_path) == current
