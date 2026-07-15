@@ -5,11 +5,17 @@ import threading
 import time
 from pathlib import Path
 
+import numpy as np
+
 DEMO_DIR = Path(__file__).parents[1] / "examples" / "pipeline_run" / "demo"
 sys.path.insert(0, str(DEMO_DIR))
 
 from mitsuba_stage import StageConfig  # noqa: E402
-from mitsuba_stage_viewer import RenderWorker, _parse_args  # noqa: E402
+from mitsuba_stage_viewer import (  # noqa: E402
+    RenderWorker,
+    _fit_preview_to_aspect,
+    _parse_args,
+)
 
 
 def _wait_until(predicate, timeout: float = 2.0) -> None:  # type: ignore[no-untyped-def]
@@ -115,3 +121,19 @@ def test_viewer_cli_rejects_interactive_spp_above_preview_spp() -> None:
         assert error.code == 2
     else:
         raise AssertionError("invalid spp combination was accepted")
+
+
+def test_preview_is_padded_to_wide_and_tall_viewports_without_distortion() -> None:
+    pixels = np.full((4, 4, 3), 255, dtype=np.uint8)
+
+    wide = _fit_preview_to_aspect(pixels, 2.0)
+    assert wide.shape == (4, 8, 3)
+    assert np.array_equal(wide[:, 2:6], pixels)
+    assert not np.any(wide[:, :2])
+    assert not np.any(wide[:, 6:])
+
+    tall = _fit_preview_to_aspect(pixels, 0.5)
+    assert tall.shape == (8, 4, 3)
+    assert np.array_equal(tall[2:6], pixels)
+    assert not np.any(tall[:2])
+    assert not np.any(tall[6:])

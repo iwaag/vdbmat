@@ -524,6 +524,23 @@ def _rgb_int(colour: RGB) -> tuple[int, int, int]:
     )
 
 
+def _fit_preview_to_aspect(
+    pixels: np.ndarray, viewport_aspect: float
+) -> np.ndarray:
+    """Pad an image so viser's stretched background preserves its aspect ratio."""
+    height, width = pixels.shape[:2]
+    image_aspect = width / height
+    if viewport_aspect > image_aspect:
+        target_width = max(width, math.ceil(height * viewport_aspect))
+        before = (target_width - width) // 2
+        padding = ((0, 0), (before, target_width - width - before), (0, 0))
+    else:
+        target_height = max(height, math.ceil(width / viewport_aspect))
+        before = (target_height - height) // 2
+        padding = ((before, target_height - height - before), (0, 0), (0, 0))
+    return np.pad(pixels, padding, mode="constant")
+
+
 class StageBinder:
     """GUI <-> StageConfig binding with per-field dirty tracking.
 
@@ -549,7 +566,10 @@ class StageBinder:
         back_colour, back_intensity = _decompose_radiance(backlight_base.radiance)
         key_azimuth, key_elevation = _decompose_direction(base.key_light.direction)
 
-        with gui.add_folder("Render (final only)", expand_by_default=False):
+        # Keep the controls in one bounded settings area. A vertical stack of
+        # expanded folders is unwieldy on shorter screens.
+        self.tabs = gui.add_tab_group()
+        with self.tabs.add_tab("Render"):
             self.width = gui.add_number(
                 "width", base.render.width, min=16, max=4096, step=16
             )
@@ -557,7 +577,7 @@ class StageBinder:
                 "height", base.render.height, min=16, max=4096, step=16
             )
             self.spp = gui.add_number("spp", base.render.spp, min=1, max=4096, step=1)
-        with gui.add_folder("Backdrop"):
+        with self.tabs.add_tab("Backdrop"):
             self.backdrop_enabled = gui.add_checkbox(
                 "enabled", base.backdrop.enabled
             )
@@ -582,7 +602,7 @@ class StageBinder:
             self.backdrop_color1 = self._rgb(
                 gui, "color1", base.backdrop.color1, "backdrop.color1"
             )
-        with gui.add_folder("Floor"):
+        with self.tabs.add_tab("Floor"):
             self.floor_enabled = gui.add_checkbox("enabled", base.floor.enabled)
             self.floor_pattern = gui.add_dropdown(
                 "pattern", ("checker", "solid"), initial_value=base.floor.pattern
@@ -602,7 +622,7 @@ class StageBinder:
             self.floor_color1 = self._rgb(
                 gui, "color1", base.floor.color1, "floor.color1"
             )
-        with gui.add_folder("Key light"):
+        with self.tabs.add_tab("Key light"):
             self.key_enabled = gui.add_checkbox("enabled", base.key_light.enabled)
             self.key_azimuth = self._slider(
                 gui, "azimuth °", -180.0, 180.0, key_azimuth, "key_light.direction"
@@ -624,7 +644,7 @@ class StageBinder:
             self.key_intensity = self._slider(
                 gui, "intensity", 0.0, 30.0, key_intensity, "key_light.radiance"
             )
-        with gui.add_folder("Camera", expand_by_default=False):
+        with self.tabs.add_tab("Camera"):
             self.camera_enabled = gui.add_checkbox(
                 "override camera", base.camera is not None
             )
@@ -643,7 +663,7 @@ class StageBinder:
             self.camera_fov = self._slider(
                 gui, "fov °", 10.0, 120.0, camera_base.fov_deg, "camera.fov_deg"
             )
-        with gui.add_folder("Backlight", expand_by_default=False):
+        with self.tabs.add_tab("Backlight"):
             self.backlight_enabled = gui.add_checkbox(
                 "override backlight", base.backlight is not None
             )
@@ -844,20 +864,43 @@ class ViewerApp:
         self.worker = RenderWorker(settle_delay=args.settle_delay)
         self.server = viser.ViserServer(host="127.0.0.1", port=args.port)
         gui = self.server.gui
+        gui.configure_theme(control_layout="fixed", control_width="large")
+        gui.set_panel_label("Mitsuba stage viewer")
 
         placeholder = np.zeros(
             (args.preview_size, args.preview_size, 3), dtype=np.uint8
         )
-        self.image = gui.add_image(placeholder, label="preview")
+        # The render belongs in the persistent viewport, not in the scrolling
+        # controls panel. This keeps it visible while any settings tab is used.
+        self._preview_lock = threading.Lock()
+        self._preview_pixels = placeholder
+        self._client_viewport_sizes: dict[int, tuple[int, int]] = {}
+
+        @self.server.on_client_connect
+        def _connect_preview(client) -> None:
+            @client.camera.on_update
+            def _resize_preview(_camera) -> None:
+                self._update_client_preview(client)
+
+            # Cover the case where the initial camera-size message arrived
+            # before this connection callback was scheduled.
+            self._update_client_preview(client, force=True)
+
+        @self.server.on_client_disconnect
+        def _disconnect_preview(client) -> None:
+            with self._preview_lock:
+                self._client_viewport_sizes.pop(client.client_id, None)
+
         self.status = gui.add_markdown("starting…")
         self.binder = StageBinder(self.server, initial, self._schedule_preview)
 
         preset_default = args.preset_out or (work_dir / "viewer.stage.json")
         final_default = args.final_out or (work_dir / "final.png")
-        self.preset_path = gui.add_text("preset path", str(preset_default))
-        save_button = gui.add_button("Save preset")
-        self.final_path = gui.add_text("final PNG path", str(final_default))
-        render_button = gui.add_button("Render final")
+        with self.binder.tabs.add_tab("Output"):
+            self.preset_path = gui.add_text("preset path", str(preset_default))
+            save_button = gui.add_button("Save preset")
+            self.final_path = gui.add_text("final PNG path", str(final_default))
+            render_button = gui.add_button("Render final")
 
         save_button.on_click(lambda _event: self._save_preset())
         render_button.on_click(lambda _event: self._queue_final())
@@ -885,9 +928,31 @@ class ViewerApp:
 
     def _publish_preview(self, result: object, quality: str) -> None:
         pixels, stats, route, elapsed = result
-        self.image.image = pixels
+        with self._preview_lock:
+            self._preview_pixels = pixels
+        for client in self.server.get_clients().values():
+            self._update_client_preview(client, force=True)
         self.status.content = (
             f"preview {quality}/{route} {elapsed:.2f}s — PIXELSTATS {stats}"
+        )
+
+    def _update_client_preview(self, client, *, force: bool = False) -> None:
+        try:
+            viewport_size = (client.camera.image_width, client.camera.image_height)
+        except AssertionError:
+            return
+        if viewport_size[0] <= 0 or viewport_size[1] <= 0:
+            return
+        with self._preview_lock:
+            if (
+                not force
+                and self._client_viewport_sizes.get(client.client_id) == viewport_size
+            ):
+                return
+            self._client_viewport_sizes[client.client_id] = viewport_size
+            pixels = self._preview_pixels
+        client.scene.set_background_image(
+            _fit_preview_to_aspect(pixels, viewport_size[0] / viewport_size[1])
         )
 
     def _save_preset(self) -> None:
