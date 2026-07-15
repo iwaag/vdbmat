@@ -103,13 +103,18 @@ def _scene_bounds(
     return minimum, maximum, center, radius, camera_direction
 
 
-def _checkerboard_bsdf(mi: ModuleType, checker_scale: int) -> dict[str, object]:
+def _checkerboard_bsdf(
+    mi: ModuleType,
+    checker_scale: int,
+    color0: tuple[float, float, float],
+    color1: tuple[float, float, float],
+) -> dict[str, object]:
     return {
         "type": "diffuse",
         "reflectance": {
             "type": "checkerboard",
-            "color0": {"type": "rgb", "value": [0.04, 0.04, 0.05]},
-            "color1": {"type": "rgb", "value": [0.82, 0.82, 0.8]},
+            "color0": {"type": "rgb", "value": list(color0)},
+            "color1": {"type": "rgb", "value": list(color1)},
             "to_uv": mi.ScalarTransform4f.scale(
                 [float(checker_scale), float(checker_scale), 1.0]
             ),
@@ -144,7 +149,13 @@ def _add_stage(
             up=[0.0, 0.0, 1.0],
         )
         @ mi.ScalarTransform4f.scale([radius * 2.6, radius * 2.6, 1.0]),
-        "bsdf": _checkerboard_bsdf(mi, checker_scale),
+        # Teal/orange: distinct in hue (not just value) from the floor below,
+        # so a viewer can tell which surface is being seen through a
+        # refracted/distorted patch instead of everything reading as one grey
+        # blur.
+        "bsdf": _checkerboard_bsdf(
+            mi, checker_scale, color0=(0.02, 0.09, 0.11), color1=(0.85, 0.5, 0.12)
+        ),
     }
 
     # Floor: a horizontal diffuse checkerboard plane below the object's lower
@@ -158,7 +169,9 @@ def _add_stage(
             [float(center[0]), float(center[1]), float(floor_z)]
         )
         @ mi.ScalarTransform4f.scale([radius * 6.0, radius * 6.0, 1.0]),
-        "bsdf": _checkerboard_bsdf(mi, checker_scale),
+        "bsdf": _checkerboard_bsdf(
+            mi, checker_scale, color0=(0.03, 0.03, 0.13), color1=(0.82, 0.76, 0.14)
+        ),
     }
 
     # Key light: a small area light from an oblique angle (distinct from the
@@ -177,7 +190,11 @@ def _add_stage(
         @ mi.ScalarTransform4f.scale([radius * 1.0, radius * 1.0, 1.0]),
         "emitter": {
             "type": "area",
-            "radiance": {"type": "rgb", "value": [6.0, 6.0, 6.0]},
+            # Slightly warm rather than pure white, so it reads as a distinct
+            # source from the canonical backlight and casts a faint colour
+            # cue on the stage/object instead of everything looking lit by
+            # one flat white source.
+            "radiance": {"type": "rgb", "value": [6.4, 5.6, 4.2]},
         },
     }
 
