@@ -228,6 +228,125 @@ def _write_two_inputs(root: Path) -> tuple[Path, Path]:
     return optical_a, optical_b
 
 
+def _write_bundle_input(root: Path, name: str, volume: object) -> Path:
+    bundle = root / name
+    bundle.mkdir()
+    write_volume(bundle / "optical.zarr", volume)
+    (bundle / "run.json").write_text(
+        json.dumps(
+            {
+                "schema": {"name": "vdbmat.run", "version": "1.0.0"},
+                "run_id": f"run-{name}",
+                "stages": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    return bundle
+
+
+def test_load_input_round_trip_renders_and_separates_final_artifacts(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "root"
+    root.mkdir()
+    volume_a = map_material_volume_to_optical(
+        homogeneous_transparent().volume, phase0_provisional_mapping()
+    )
+    bundle_a = _write_bundle_input(root, "bundle-a", volume_a)
+    volume_b = map_material_volume_to_optical(
+        transparent_opaque_interface().volume, phase0_provisional_mapping()
+    )
+    optical_b = root / "standalone-b.zarr"
+    write_volume(optical_b, volume_b)
+    stage = StageConfig(
+        render=RenderSettings(width=8, height=8, spp=1, max_depth=13)
+    )
+    work = tmp_path / "work"
+    core = StageCore(
+        bundle_a / "optical.zarr",
+        work,
+        preview_size=8,
+        preview_spp=1,
+        initial=stage,
+    )
+
+    sessions = [core._session]
+    for selection in (Path("standalone-b.zarr"), Path("bundle-a")):
+        sessions.append(core.load_input(root, selection, stage, smoke_spp=1))
+        pixels, stats, _route = core.render_preview(stage)
+        assert pixels.shape == (8, 8, 3)
+        assert "max_depth=13" in stats
+        core.render_final(stage, tmp_path / f"final-{len(sessions)}.png")
+
+    assert core.session_generation == 2
+    assert [session.optical_zarr for session in sessions] == [
+        bundle_a / "optical.zarr",
+        optical_b.resolve(),
+        (bundle_a / "optical.zarr").resolve(),
+    ]
+    assert len({session.work_dir for session in sessions}) == 3
+    for session in sessions:
+        summary = json.loads(
+            (session.work_dir / "final_scene" / "scene-summary.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        assert summary["render"]["max_depth"] == 13
+
+
+def test_load_input_rejects_invalid_candidates_without_changing_live_preview(
+    tmp_path: Path,
+) -> None:
+    import zarr as zarr_module
+
+    root = tmp_path / "root"
+    optical_a, _optical_b = _write_two_inputs(root)
+    stage = StageConfig(render=RenderSettings(width=8, height=8, spp=1))
+    core = StageCore(
+        optical_a,
+        tmp_path / "work",
+        preview_size=8,
+        preview_spp=1,
+        initial=stage,
+    )
+    original_session = core._session
+    original_pixels, _stats, _route = core.render_preview(stage)
+
+    corrupted = root / "corrupted.zarr"
+    write_volume(
+        corrupted,
+        map_material_volume_to_optical(
+            transparent_opaque_interface().volume, phase0_provisional_mapping()
+        ),
+    )
+    group = zarr_module.open_group(corrupted, mode="r+")
+    manifest = dict(group.attrs["vdbmat"])
+    manifest["arrays"] = dict(manifest["arrays"])
+    manifest["arrays"]["g"] = dict(manifest["arrays"]["g"])
+    manifest["arrays"]["g"]["unit"] = "not-a-real-unit"
+    group.attrs["vdbmat"] = manifest
+
+    material = root / "material.zarr"
+    write_volume(material, transparent_opaque_interface().volume)
+    outside = tmp_path / "outside.zarr"
+    write_volume(outside, transparent_opaque_interface().volume)
+    escaping_link = root / "escape.zarr"
+    escaping_link.symlink_to(outside, target_is_directory=True)
+
+    for selection in (Path("corrupted.zarr"), Path("material.zarr"), escaping_link):
+        stages: list[str] = []
+        with pytest.raises(InputLoadError) as excinfo:
+            core.load_input(root, selection, stage, smoke_spp=1, on_stage=stages.append)
+        assert excinfo.value.stage == "validate"
+        assert stages == ["validate"]
+        assert core._session is original_session
+        assert core.session_generation == 0
+
+        current_pixels, _stats, _route = core.render_preview(stage)
+        np.testing.assert_array_equal(current_pixels, original_pixels)
+
+
 def test_load_input_swaps_to_new_session_using_current_stage_settings(
     tmp_path: Path,
 ) -> None:
