@@ -24,6 +24,7 @@ from mitsuba_stage_viewer import (  # noqa: E402
     _fit_preview_to_aspect,
     _parse_args,
     _preview_stage_config,
+    _resolve_initial_optical_zarr,
     _session_work_dir,
     _slug_for,
     _structure_key,
@@ -192,6 +193,35 @@ def test_viewer_cli_rejects_interactive_spp_above_preview_spp() -> None:
         assert error.code == 2
     else:
         raise AssertionError("invalid spp combination was accepted")
+
+
+def test_viewer_cli_accepts_input_root() -> None:
+    args = _parse_args(["input.zarr", "--input-root", "/some/root"])
+    assert args.input_root == Path("/some/root")
+
+
+def test_viewer_cli_input_root_defaults_to_none() -> None:
+    args = _parse_args(["input.zarr"])
+    assert args.input_root is None
+
+
+def test_resolve_initial_optical_zarr_passes_through_bare_store(
+    tmp_path: Path,
+) -> None:
+    optical_zarr = tmp_path / "standalone.zarr"
+    optical_zarr.mkdir()
+
+    assert _resolve_initial_optical_zarr(optical_zarr) == optical_zarr
+
+
+def test_resolve_initial_optical_zarr_resolves_bundle_directory(
+    tmp_path: Path,
+) -> None:
+    bundle = tmp_path / "bundle_a"
+    bundle.mkdir()
+    (bundle / "run.json").write_text("{}")
+
+    assert _resolve_initial_optical_zarr(bundle) == bundle / "optical.zarr"
 
 
 def test_preview_is_padded_to_wide_and_tall_viewports_without_distortion() -> None:

@@ -36,7 +36,8 @@ Invoke on the host (no Docker needed for Mitsuba):
 
     uv run --group mitsuba-viewer python \
         examples/pipeline_run/demo/mitsuba_stage_viewer.py -- \
-        OPTICAL_ZARR [--stage-config PRESET.stage.json] [--port 8080] \
+        OPTICAL_ZARR_OR_BUNDLE [--input-root DIR] \
+        [--stage-config PRESET.stage.json] [--port 8080] \
         [--work-dir DIR] [--preview-size 256] [--preview-spp 16] \
         [--interactive-spp 4] [--settle-delay 0.35] \
         [--variant llvm_ad_rgb|cuda_ad_rgb] \
@@ -45,6 +46,14 @@ Invoke on the host (no Docker needed for Mitsuba):
 ``--work-dir`` (default: a fresh temp directory) receives the PLY/scene
 side-effect files and the default preset/PNG outputs; point it at
 ``.local/...`` to keep artifacts with the repo checkout.
+
+The positional argument is the initial input: either a single
+``optical.zarr`` store, or a canonical run bundle directory (containing
+``run.json``; its ``optical.zarr`` member is read). ``--input-root``
+(default: the initial input's parent directory) is the server-local
+directory the GUI's Input tab scans for sibling bundles/stores to switch
+to via Load/Rebuild; see :mod:`mitsuba_stage_inputs` for the catalog
+contract and containment rules.
 """
 
 from __future__ import annotations
@@ -78,7 +87,13 @@ from mitsuba_stage import (
     stage_config_from_json,
     stage_config_to_dict,
 )
-from mitsuba_stage_inputs import resolve_candidate
+from mitsuba_stage_inputs import (
+    InputCatalogError,
+    describe_candidate,
+    resolve_candidate,
+    resolve_input_root,
+    scan_input_catalog,
+)
 
 from vdbmat.core.volumes import OpticalPropertyVolume
 from vdbmat.exporters.mitsuba import MitsubaExportConfig, prepare_mitsuba_scene
@@ -91,7 +106,19 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     if "--" in argv:
         argv = argv[argv.index("--") + 1 :]
     parser = argparse.ArgumentParser(prog="mitsuba_stage_viewer")
-    parser.add_argument("optical_zarr", type=Path)
+    parser.add_argument(
+        "optical_zarr",
+        type=Path,
+        help="initial input: an optical.zarr store, or a run bundle "
+        "directory (containing run.json)",
+    )
+    parser.add_argument(
+        "--input-root",
+        type=Path,
+        default=None,
+        help="server-local directory the Input tab scans for switchable "
+        "bundles/stores (default: the initial input's parent directory)",
+    )
     parser.add_argument("--stage-config", type=Path, default=None)
     parser.add_argument("--port", type=int, default=8080)
     parser.add_argument(
@@ -190,7 +217,22 @@ def _final_render_key(render: RenderSettings) -> FinalRenderKey:
 
 _INPUTS_DIRNAME = "inputs"
 _OPTICAL_ASSET_NAME = "optical.zarr"
+_RUN_MANIFEST_NAME = "run.json"
 _SLUG_PATTERN = re.compile(r"[^a-zA-Z0-9]+")
+
+
+def _resolve_initial_optical_zarr(initial_input: Path) -> Path:
+    """Resolve the CLI positional argument to an actual ``optical.zarr`` store.
+
+    Accepts either a bare ``optical.zarr`` store or a canonical run bundle
+    directory (containing ``run.json``), matching the bundle/store
+    distinction ``mitsuba_stage_inputs`` uses for catalog candidates. Kept
+    independent of that module's candidate/containment logic since the CLI's
+    initial input is exempt from the ``--input-root`` containment rule.
+    """
+    if (initial_input / _RUN_MANIFEST_NAME).is_file():
+        return initial_input / _OPTICAL_ASSET_NAME
+    return initial_input
 
 
 def _slug_for(optical_zarr: Path) -> str:
@@ -821,7 +863,12 @@ class StageBinder:
     """
 
     def __init__(
-        self, server, base: StageConfig, on_change: Callable[[], None]
+        self,
+        server,
+        base: StageConfig,
+        on_change: Callable[[], None],
+        *,
+        input_tab: Callable[[object], None] | None = None,
     ) -> None:
         self.base = base
         self.dirty: set[str] = set()
@@ -838,6 +885,10 @@ class StageBinder:
         # Keep the controls in one bounded settings area. A vertical stack of
         # expanded folders is unwieldy on shorter screens.
         self.tabs = gui.add_tab_group()
+        if input_tab is not None:
+            # Input comes first: choosing what to render precedes tuning how.
+            with self.tabs.add_tab("Input"):
+                input_tab(gui)
         with self.tabs.add_tab("Render"):
             self.width = gui.add_number(
                 "width", base.render.width, min=16, max=4096, step=16
@@ -1129,8 +1180,22 @@ class ViewerApp:
         else:
             initial = StageConfig()
 
+        self._initial_input_path = args.optical_zarr.resolve()
+        try:
+            self.input_root = resolve_input_root(args.input_root, args.optical_zarr)
+        except InputCatalogError as error:
+            raise SystemExit(str(error)) from error
+        if self._initial_input_path.is_relative_to(self.input_root):
+            self._initial_sentinel: str | None = None
+            self._current_selection = self._initial_input_path.relative_to(
+                self.input_root
+            ).as_posix()
+        else:
+            self._initial_sentinel = f"(initial) {self._initial_input_path}"
+            self._current_selection = self._initial_sentinel
+
         self.core = StageCore(
-            args.optical_zarr,
+            _resolve_initial_optical_zarr(args.optical_zarr),
             work_dir,
             preview_size=args.preview_size,
             preview_spp=args.preview_spp,
@@ -1169,7 +1234,12 @@ class ViewerApp:
                 self._client_viewport_sizes.pop(client.client_id, None)
 
         self.status = gui.add_markdown("starting…")
-        self.binder = StageBinder(self.server, initial, self._schedule_preview)
+        self.binder = StageBinder(
+            self.server,
+            initial,
+            self._schedule_preview,
+            input_tab=self._build_input_tab,
+        )
 
         preset_default = args.preset_out or (work_dir / "viewer.stage.json")
         final_default = args.final_out or (work_dir / "final.png")
@@ -1265,6 +1335,114 @@ class ViewerApp:
     def _show_error(self, message: str) -> None:
         self.status.content = f"**render error**\n```\n{message}\n```"
         print(f"RENDER ERROR {message}", file=sys.stderr)
+
+    # -- Input tab ----------------------------------------------------------
+    #
+    # Dropdown selection, Refresh, and the summary markdown are read-only I/O
+    # (catalog scan, manifest read) and never touch the worker, the core, or
+    # Mitsuba: choosing a candidate is deliberately separate from applying it.
+    # Only Load/Rebuild submits a job.
+
+    def _root_and_path_for(self, selection: str) -> tuple[Path, Path]:
+        if selection == self._initial_sentinel:
+            return self._initial_input_path.parent, Path(
+                self._initial_input_path.name
+            )
+        return self.input_root, Path(selection)
+
+    def _dropdown_options(self) -> list[str]:
+        relatives = [c.root_relative for c in scan_input_catalog(self.input_root)]
+        options = (
+            [self._initial_sentinel, *relatives]
+            if self._initial_sentinel is not None
+            else relatives
+        )
+        if self._current_selection not in options:
+            options = [self._current_selection, *options]
+        return options
+
+    def _describe_selection(self, selection: str) -> str:
+        root, user_path = self._root_and_path_for(selection)
+        try:
+            candidate = resolve_candidate(root, user_path)
+            summary = describe_candidate(candidate)
+        except Exception as error:
+            return f"**cannot describe input**: {error}"
+        lines = [
+            f"- kind: {summary.kind.value}",
+            f"- schema: {summary.schema_name} {summary.schema_version}",
+            f"- shape (z,y,x): {summary.shape_zyx}",
+            f"- voxel size (x,y,z) m: {summary.voxel_size_xyz_m}",
+        ]
+        if summary.run_id is not None:
+            lines.append(f"- run id: {summary.run_id}")
+        if summary.provenance_sources:
+            lines.append(f"- sources: {', '.join(summary.provenance_sources)}")
+        if summary.provenance_notes:
+            lines.append(f"- notes: {summary.provenance_notes}")
+        return "\n".join(lines)
+
+    def _build_input_tab(self, gui) -> None:
+        options = self._dropdown_options()
+        self.input_dropdown = gui.add_dropdown(
+            "input", tuple(options), initial_value=self._current_selection
+        )
+        self.input_refresh_button = gui.add_button("Refresh")
+        self.input_summary = gui.add_markdown(
+            self._describe_selection(self._current_selection)
+        )
+        self.input_load_button = gui.add_button("Load / Rebuild")
+
+        self.input_dropdown.on_update(lambda _event: self._update_input_summary())
+        self.input_refresh_button.on_click(
+            lambda _event: self._refresh_input_catalog()
+        )
+        self.input_load_button.on_click(lambda _event: self._queue_load_input())
+
+    def _update_input_summary(self) -> None:
+        self.input_summary.content = self._describe_selection(
+            self.input_dropdown.value
+        )
+
+    def _refresh_input_catalog(self) -> None:
+        options = self._dropdown_options()
+        previous = self.input_dropdown.value
+        self.input_dropdown.options = tuple(options)
+        if previous not in options:
+            self.input_dropdown.value = self._current_selection
+        self._update_input_summary()
+
+    def _queue_load_input(self) -> None:
+        selection = self.input_dropdown.value
+        root, user_path = self._root_and_path_for(selection)
+        current_config = self.binder.current()
+
+        self.input_load_button.disabled = True
+        self.status.content = "input load: validate…"
+
+        def on_stage(stage: str) -> None:
+            self.status.content = f"input load: {stage}…"
+
+        def job() -> None:
+            try:
+                self.core.load_input(
+                    root,
+                    user_path,
+                    current_config,
+                    self.interactive_spp,
+                    on_stage=on_stage,
+                )
+            except InputLoadError as error:
+                self.status.content = f"**{error}**"
+                print(f"INPUT LOAD ERROR {error}", file=sys.stderr)
+            else:
+                self._current_selection = selection
+                self.status.content = "input loaded"
+                self._schedule_preview()
+            finally:
+                self.input_load_button.disabled = False
+
+        self.worker.submit(job)
 
 
 def main() -> None:
