@@ -4,6 +4,7 @@ import json
 import sys
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -26,12 +27,17 @@ from mitsuba_stage import (  # noqa: E402
     apply_stage,
     stage_config_to_dict,
 )
+from mitsuba_stage_inputs import resolve_candidate  # noqa: E402
 from mitsuba_stage_presets import load_preset, resolve_preset  # noqa: E402
 from mitsuba_stage_viewer import (  # noqa: E402
     InputLoadError,
     StageCore,
     TraversedPreviewScene,
     _session_work_dir,
+)
+from mitsuba_viewer_session import (  # noqa: E402
+    create_viewer_session,
+    write_viewer_session,
 )
 
 mi = pytest.importorskip("mitsuba")
@@ -166,9 +172,7 @@ def test_stage_core_final_reprepare_uses_max_depth(tmp_path: Path) -> None:
     stats = core.render_final(changed, tmp_path / "final.png")
     session_dir = _session_work_dir(tmp_path / "work", 0, optical_zarr)
     summary = json.loads(
-        (session_dir / "final_scene" / "scene-summary.json").read_text(
-            encoding="utf-8"
-        )
+        (session_dir / "final_scene" / "scene-summary.json").read_text(encoding="utf-8")
     )
 
     assert route == "rebuild"
@@ -183,9 +187,7 @@ def test_loaded_stage_preset_drives_preview_and_final_render(tmp_path: Path) -> 
     )
     optical_zarr = tmp_path / "optical.zarr"
     write_volume(optical_zarr, volume)
-    initial = StageConfig(
-        render=RenderSettings(width=8, height=8, spp=1, max_depth=8)
-    )
+    initial = StageConfig(render=RenderSettings(width=8, height=8, spp=1, max_depth=8))
     applied = replace(
         initial,
         render=replace(initial.render, max_depth=15),
@@ -207,9 +209,9 @@ def test_loaded_stage_preset_drives_preview_and_final_render(tmp_path: Path) -> 
     pixels, preview_stats, route = core.render_preview(loaded)
     final_stats = core.render_final(loaded, tmp_path / "preset-final.png")
     summary = json.loads(
-        (
-            core._session.work_dir / "final_scene" / "scene-summary.json"
-        ).read_text(encoding="utf-8")
+        (core._session.work_dir / "final_scene" / "scene-summary.json").read_text(
+            encoding="utf-8"
+        )
     )
 
     assert pixels.shape == (8, 8, 3)
@@ -303,9 +305,7 @@ def test_load_input_round_trip_renders_and_separates_final_artifacts(
     )
     optical_b = root / "standalone-b.zarr"
     write_volume(optical_b, volume_b)
-    stage = StageConfig(
-        render=RenderSettings(width=8, height=8, spp=1, max_depth=13)
-    )
+    stage = StageConfig(render=RenderSettings(width=8, height=8, spp=1, max_depth=13))
     work = tmp_path / "work"
     core = StageCore(
         bundle_a / "optical.zarr",
@@ -337,6 +337,141 @@ def test_load_input_round_trip_renders_and_separates_final_artifacts(
             )
         )
         assert summary["render"]["max_depth"] == 13
+
+
+def test_prepare_input_session_is_transactional_and_preserves_live_seed(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "root"
+    optical_a, optical_b = _write_two_inputs(root)
+    stage = StageConfig(render=RenderSettings(width=8, height=8, spp=1))
+    core = StageCore(
+        optical_a,
+        tmp_path / "work",
+        preview_size=8,
+        preview_spp=1,
+        initial=stage,
+        seed=37,
+    )
+    original = core.current_session
+
+    prepared = core.prepare_input_session(root, Path("b.zarr"), stage, smoke_spp=1)
+
+    assert core.current_session is original
+    assert core.session_generation == 0
+    assert prepared.optical_zarr == optical_b.resolve()
+    assert prepared.seed == 37
+
+    core.swap_session(prepared)
+    reloaded = core.load_input(root, Path("a.zarr"), stage, smoke_spp=1)
+
+    assert core.session_generation == 2
+    assert reloaded.seed == 37
+
+
+def test_viewer_session_load_verifies_then_commits_input_config_and_seed(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "root"
+    optical_a, optical_b = _write_two_inputs(root)
+    initial = StageConfig(render=RenderSettings(width=8, height=8, spp=1))
+    restored = StageConfig(
+        render=RenderSettings(width=8, height=8, spp=1, max_depth=13),
+        camera=CameraOverride(azimuth_deg=-25.0),
+    )
+    session = create_viewer_session(
+        resolve_candidate(root, Path("a.zarr")),
+        restored,
+        "llvm_ad_rgb",
+        91,
+    )
+    session_path = tmp_path / "saved.session.json"
+    write_viewer_session(session_path, session)
+
+    startup_args = mitsuba_stage_viewer._parse_args(
+        [
+            "--session",
+            str(session_path),
+            "--input-root",
+            str(root),
+            "--variant",
+            "llvm_ad_rgb",
+            "--seed",
+            "91",
+        ]
+    )
+    startup = mitsuba_stage_viewer._resolve_viewer_startup(startup_args, tmp_path)
+    assert startup.initial_input == optical_a.resolve()
+    assert startup.initial_config == restored
+    assert startup.variant == "llvm_ad_rgb"
+    assert startup.seed == 91
+    assert startup.session_root == tmp_path.resolve()
+
+    core = StageCore(
+        optical_b,
+        tmp_path / "work",
+        preview_size=8,
+        preview_spp=1,
+        initial=initial,
+    )
+
+    class Binder:
+        def __init__(self) -> None:
+            self.config = initial
+
+        def current(self) -> StageConfig:
+            return self.config
+
+        def replace_config(self, config: StageConfig) -> None:
+            self.config = config
+
+    app = mitsuba_stage_viewer.ViewerApp.__new__(mitsuba_stage_viewer.ViewerApp)
+    app.core = core
+    app.input_root = root
+    app.preset_root = tmp_path
+    app.interactive_spp = 1
+    app.binder = Binder()
+    app._current_selection = "b.zarr"
+    app.applied_preset = None
+    app.input_dropdown = SimpleNamespace(value="b.zarr")
+    app.preset_dropdown = SimpleNamespace(options=(), value="")
+
+    corrupted_path = tmp_path / "corrupted.session.json"
+    document = json.loads(session_path.read_text(encoding="utf-8"))
+    document["input"]["optical_sha256"] = "sha256:" + "0" * 64
+    corrupted_path.write_text(json.dumps(document), encoding="utf-8")
+    original_session = core.current_session
+    with pytest.raises(Exception, match="input optical digest mismatch"):
+        app._load_session_transaction(corrupted_path, lambda _stage: None)
+    assert core.current_session is original_session
+    assert core.session_generation == 0
+    assert app.binder.current() == initial
+    assert app._current_selection == "b.zarr"
+
+    stages: list[str] = []
+    app._load_session_transaction(session_path, stages.append)
+
+    assert stages == [
+        "parse",
+        "resolve",
+        "verify",
+        "prepare",
+        "load",
+        "smoke",
+        "commit",
+    ]
+    assert core.session_generation == 1
+    assert core.current_session.optical_zarr == optical_a.resolve()
+    assert core.current_session.seed == 91
+    assert app.binder.current() == restored
+    assert app._current_selection == "a.zarr"
+    core.render_final(restored, tmp_path / "restored.png")
+    summary = json.loads(
+        (
+            core.current_session.work_dir / "final_scene" / "scene-summary.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert summary["render"]["seed"] == 91
 
 
 def test_load_input_rejects_invalid_candidates_without_changing_live_preview(
@@ -396,9 +531,7 @@ def test_load_input_swaps_to_new_session_using_current_stage_settings(
 ) -> None:
     root = tmp_path / "root"
     optical_a, optical_b = _write_two_inputs(root)
-    initial = StageConfig(
-        render=RenderSettings(width=8, height=8, spp=1, max_depth=11)
-    )
+    initial = StageConfig(render=RenderSettings(width=8, height=8, spp=1, max_depth=11))
     core = StageCore(
         optical_a, tmp_path / "work", preview_size=8, preview_spp=1, initial=initial
     )
@@ -550,8 +683,7 @@ def test_saved_preset_viewer_final_matches_headless_replay(
 ) -> None:
     repository = Path(__file__).parents[2]
     material = read_material_label_manifest(
-        repository
-        / "examples/pipeline_run/inputs/nested_material_cube.voxels.json"
+        repository / "examples/pipeline_run/inputs/nested_material_cube.voxels.json"
     )
     volume = map_material_volume_to_optical(material, phase0_provisional_mapping())
     optical_zarr = tmp_path / "optical.zarr"

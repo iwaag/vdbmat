@@ -4,9 +4,8 @@ This is a demo-track helper; it is not part of the canonical pipeline and
 produces qualitative, uncalibrated images. ``prepare_mitsuba_scene()`` /
 ``render_mitsuba()`` / ``MitsubaExportConfig`` are untouched, and this viewer
 is a pure consumer of the Phase-1 contract in :mod:`mitsuba_stage`: it edits a
-``StageConfig``, previews it, and its only durable outputs are a
-``*.stage.json`` preset (replayable headlessly with
-``mitsuba_stage_demo.py --stage-config``) and a final PNG.
+``StageConfig``, previews it, and its durable outputs are a ``*.stage.json``
+preset, a digest-pinned ``*.session.json`` manifest, and a final PNG.
 
 Architecture (see .devdocs/vision/mitsuba_gui/p3/plan.md):
 
@@ -36,8 +35,9 @@ Invoke on the host (no Docker needed for Mitsuba):
 
     uv run --group mitsuba-viewer python \
         examples/pipeline_run/demo/mitsuba_stage_viewer.py -- \
-        OPTICAL_ZARR_OR_BUNDLE [--input-root DIR] \
+        [OPTICAL_ZARR_OR_BUNDLE] [--input-root DIR] \
         [--stage-config PRESET.stage.json] [--preset-root DIR] [--port 8080] \
+        [--session SESSION.json] [--session-root DIR] [--seed SEED] \
         [--work-dir DIR] [--preview-size 256] [--preview-spp 16] \
         [--interactive-spp 4] [--settle-delay 0.35] \
         [--variant llvm_ad_rgb|cuda_ad_rgb] \
@@ -103,7 +103,14 @@ from mitsuba_stage_presets import (
     scan_preset_catalog,
     stage_config_digest,
 )
-from mitsuba_viewer_session import SessionPresetRef
+from mitsuba_viewer_session import (
+    SessionPresetRef,
+    ViewerSessionError,
+    create_viewer_session,
+    resolve_viewer_session,
+    viewer_session_from_json,
+    write_viewer_session,
+)
 
 from vdbmat.core.volumes import OpticalPropertyVolume
 from vdbmat.exporters.mitsuba import MitsubaExportConfig, prepare_mitsuba_scene
@@ -118,6 +125,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(prog="mitsuba_stage_viewer")
     parser.add_argument(
         "optical_zarr",
+        nargs="?",
         type=Path,
         help="initial input: an optical.zarr store, or a run bundle "
         "directory (containing run.json)",
@@ -137,6 +145,19 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "files (default: --stage-config parent, or builtin demo presets)",
     )
     parser.add_argument("--stage-config", type=Path, default=None)
+    parser.add_argument(
+        "--session",
+        type=Path,
+        default=None,
+        help="restore a viewer session; requires --input-root",
+    )
+    parser.add_argument(
+        "--session-root",
+        type=Path,
+        default=None,
+        help="root for GUI session Save/Load paths",
+    )
+    parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--port", type=int, default=8080)
     parser.add_argument(
         "--work-dir",
@@ -152,8 +173,8 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--variant",
         choices=("llvm_ad_rgb", "cuda_ad_rgb"),
-        default="llvm_ad_rgb",
-        help="Mitsuba execution backend (default: llvm_ad_rgb, CPU)",
+        default=None,
+        help="Mitsuba execution backend (legacy default: llvm_ad_rgb, CPU)",
     )
     parser.add_argument(
         "--preset-out",
@@ -176,7 +197,144 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         parser.error("--interactive-spp must be <= --preview-spp")
     if args.settle_delay < 0.0:
         parser.error("--settle-delay must be >= 0")
+    if args.seed is not None and args.seed < 0:
+        parser.error("--seed must be >= 0")
+    if args.session is None and args.optical_zarr is None:
+        parser.error("OPTICAL_ZARR_OR_BUNDLE is required without --session")
+    if args.session is not None:
+        if args.optical_zarr is not None:
+            parser.error("OPTICAL_ZARR_OR_BUNDLE cannot be used with --session")
+        if args.input_root is None:
+            parser.error("--input-root is required with --session")
+        if args.stage_config is not None:
+            parser.error("--stage-config cannot be used with --session")
     return args
+
+
+def _resolve_session_root(
+    cli_root: Path | None, startup_session: Path | None, work_dir: Path
+) -> Path:
+    candidate = cli_root
+    if candidate is None and startup_session is not None:
+        candidate = startup_session.resolve().parent
+    if candidate is None:
+        candidate = work_dir
+    root = candidate.resolve()
+    if not root.is_dir():
+        raise ViewerSessionError("resolve", f"session root is not a directory: {root}")
+    return root
+
+
+def _resolve_session_path(root: Path, user_path: Path, *, must_exist: bool) -> Path:
+    """Resolve one root-relative session path without permitting root escape."""
+    if user_path.is_absolute() or not user_path.parts or user_path == Path("."):
+        raise ViewerSessionError("resolve", "session path must be root-relative")
+    if ".." in user_path.parts:
+        raise ViewerSessionError("resolve", "session path must not contain '..'")
+    candidate = root / user_path
+    resolved = candidate.resolve(strict=must_exist)
+    if not resolved.is_relative_to(root.resolve()):
+        raise ViewerSessionError(
+            "resolve", f"session path escapes session root: {user_path}"
+        )
+    if must_exist and not resolved.is_file():
+        raise ViewerSessionError("resolve", f"session file does not exist: {user_path}")
+    return resolved
+
+
+@dataclass(frozen=True, slots=True)
+class ViewerStartup:
+    initial_input: Path
+    initial_config: StageConfig
+    input_root: Path
+    preset_root: Path
+    session_root: Path
+    variant: str
+    seed: int
+    applied_preset: SessionPresetRef | None
+
+
+def _startup_preset_ref(
+    stage_config_path: Path | None,
+    config: StageConfig,
+    preset_root: Path,
+) -> SessionPresetRef | None:
+    if stage_config_path is None:
+        return None
+    try:
+        relative = stage_config_path.resolve().relative_to(preset_root)
+        candidate = resolve_preset(preset_root, relative)
+        loaded = load_preset(candidate)
+    except (OSError, PresetCatalogError, ValueError):
+        return None
+    digest = stage_config_digest(config)
+    if stage_config_digest(loaded) != digest:
+        return None
+    return SessionPresetRef(path=candidate.root_relative, digest=digest)
+
+
+def _resolve_viewer_startup(args: argparse.Namespace, work_dir: Path) -> ViewerStartup:
+    """Resolve all startup state before importing Mitsuba or building scenes."""
+    if args.session is None:
+        assert args.optical_zarr is not None
+        initial = (
+            stage_config_from_json(args.stage_config)
+            if args.stage_config is not None
+            else StageConfig()
+        )
+        preset_root = resolve_preset_root(args.preset_root, args.stage_config)
+        input_root = resolve_input_root(args.input_root, args.optical_zarr)
+        session_root = _resolve_session_root(
+            None if args.session_root is None else args.session_root, None, work_dir
+        )
+        return ViewerStartup(
+            initial_input=args.optical_zarr.resolve(),
+            initial_config=initial,
+            input_root=input_root,
+            preset_root=preset_root,
+            session_root=session_root,
+            variant=args.variant or "llvm_ad_rgb",
+            seed=MitsubaExportConfig().seed if args.seed is None else args.seed,
+            applied_preset=_startup_preset_ref(args.stage_config, initial, preset_root),
+        )
+
+    startup_path = args.session.resolve()
+    session_root = _resolve_session_root(args.session_root, startup_path, work_dir)
+    session_user_path = (
+        Path(startup_path.name) if args.session_root is None else args.session
+    )
+    session_path = _resolve_session_path(
+        session_root, session_user_path, must_exist=True
+    )
+    session = viewer_session_from_json(session_path)
+    preset_root = resolve_preset_root(args.preset_root, None)
+    if session.preset is not None and args.preset_root is None:
+        raise ViewerSessionError(
+            "resolve", "stage preset reference requires --preset-root"
+        )
+    assert args.input_root is not None
+    input_root = resolve_input_root(args.input_root, args.input_root)
+    resolved = resolve_viewer_session(session, input_root, preset_root)
+    if args.variant is not None and args.variant != resolved.variant:
+        raise ViewerSessionError(
+            "resolve",
+            f"--variant {args.variant} does not match session variant "
+            f"{resolved.variant}",
+        )
+    if args.seed is not None and args.seed != resolved.seed:
+        raise ViewerSessionError(
+            "resolve", f"--seed {args.seed} does not match session seed {resolved.seed}"
+        )
+    return ViewerStartup(
+        initial_input=resolved.input_candidate.path,
+        initial_config=resolved.stage_config,
+        input_root=input_root,
+        preset_root=preset_root,
+        session_root=session_root,
+        variant=resolved.variant,
+        seed=resolved.seed,
+        applied_preset=resolved.session.preset,
+    )
 
 
 def _load_mitsuba(variant: str) -> ModuleType:
@@ -366,13 +524,9 @@ class TraversedPreviewScene:
             old_section = old.backdrop if name == "stage_backdrop" else old.floor
             if section.pattern == "checker":
                 if section.color0 != old_section.color0:
-                    self._set(
-                        f"{name}.bsdf.reflectance.color0.value", section.color0
-                    )
+                    self._set(f"{name}.bsdf.reflectance.color0.value", section.color0)
                 if section.color1 != old_section.color1:
-                    self._set(
-                        f"{name}.bsdf.reflectance.color1.value", section.color1
-                    )
+                    self._set(f"{name}.bsdf.reflectance.color1.value", section.color1)
                 if section.checker_scale != old_section.checker_scale:
                     transform = self.mi.ScalarTransform3f.scale(
                         [float(section.checker_scale), float(section.checker_scale)]
@@ -403,8 +557,7 @@ class TraversedPreviewScene:
                 config.key_light.enabled
                 and (
                     config.key_light.direction != old.key_light.direction
-                    or config.key_light.distance_factor
-                    != old.key_light.distance_factor
+                    or config.key_light.distance_factor != old.key_light.distance_factor
                     or config.key_light.scale_factor != old.key_light.scale_factor
                 ),
             ),
@@ -491,6 +644,7 @@ class StageCore:
         preview_spp: int,
         initial: StageConfig,
         variant: str = "llvm_ad_rgb",
+        seed: int = MitsubaExportConfig().seed,
     ) -> None:
         self.work_dir = work_dir
         self.preview_size = preview_size
@@ -498,23 +652,31 @@ class StageCore:
         self.mi = _load_mitsuba(variant)
         self.session_generation = 0
         self._session_seq = itertools.count()
-        self._session = self._build_session(optical_zarr, initial)
+        self._session = self._build_session(optical_zarr, initial, seed)
 
-    def _build_session(self, optical_zarr: Path, initial: StageConfig) -> InputSession:
+    @property
+    def current_session(self) -> InputSession:
+        return self._session
+
+    def _build_session(
+        self,
+        optical_zarr: Path,
+        initial: StageConfig,
+        seed: int = MitsubaExportConfig().seed,
+    ) -> InputSession:
         volume = read_volume(optical_zarr)
         if not isinstance(volume, OpticalPropertyVolume):
             raise SystemExit(f"{optical_zarr} is not an optical property volume")
         session_dir = _session_work_dir(
             self.work_dir, next(self._session_seq), optical_zarr
         )
-        seed = MitsubaExportConfig().seed
-
         preview_config = MitsubaExportConfig(
             width=self.preview_size,
             height=self.preview_size,
             spp=self.preview_spp,
             max_depth=initial.render.max_depth,
             variant=self.mi.variant(),
+            seed=seed,
         )
         base_preview = prepare_mitsuba_scene(
             volume, session_dir / "preview_scene", config=preview_config
@@ -550,6 +712,7 @@ class StageCore:
             spp=render.spp,
             max_depth=render.max_depth,
             variant=self.mi.variant(),
+            seed=session.seed,
         )
         session.base_final = prepare_mitsuba_scene(
             session.volume, session.work_dir / "final_scene", config=config
@@ -635,6 +798,29 @@ class StageCore:
         (and therefore the live preview) untouched. Only ``swap`` mutates
         ``self``.
         """
+        session = self.prepare_input_session(
+            root,
+            user_path,
+            current_config,
+            smoke_spp,
+            on_stage=on_stage,
+        )
+        on_stage("swap")
+        self.swap_session(session)
+        return session
+
+    def prepare_input_session(
+        self,
+        root: Path,
+        user_path: Path,
+        current_config: StageConfig,
+        smoke_spp: int,
+        *,
+        seed: int | None = None,
+        on_stage: Callable[[str], None] = lambda stage: None,
+    ) -> InputSession:
+        """Build and smoke-test an input without changing the live session."""
+        session_seed = self._session.seed if seed is None else seed
         on_stage("validate")
         try:
             candidate = resolve_candidate(root, user_path)
@@ -652,8 +838,6 @@ class StageCore:
         session_dir = _session_work_dir(
             self.work_dir, next(self._session_seq), candidate.optical_zarr
         )
-        seed = MitsubaExportConfig().seed
-
         on_stage("prepare")
         try:
             preview_config = MitsubaExportConfig(
@@ -662,6 +846,7 @@ class StageCore:
                 spp=self.preview_spp,
                 max_depth=current_config.render.max_depth,
                 variant=self.mi.variant(),
+                seed=session_seed,
             )
             base_preview = prepare_mitsuba_scene(
                 volume, session_dir / "preview_scene", config=preview_config
@@ -676,7 +861,11 @@ class StageCore:
                 current_config, self.preview_size, self.preview_spp
             )
             preview_scene = TraversedPreviewScene(
-                self.mi, base_preview, volume.geometry, preview_initial, seed
+                self.mi,
+                base_preview,
+                volume.geometry,
+                preview_initial,
+                session_seed,
             )
         except Exception as error:
             _discard_session_dir(session_dir)
@@ -689,15 +878,13 @@ class StageCore:
             _discard_session_dir(session_dir)
             raise InputLoadError("smoke", str(error)) from error
 
-        on_stage("swap")
         session = InputSession(
             optical_zarr=candidate.optical_zarr,
             work_dir=session_dir,
             volume=volume,
-            seed=seed,
+            seed=session_seed,
             preview_scene=preview_scene,
         )
-        self.swap_session(session)
         return session
 
 
@@ -819,8 +1006,7 @@ def _decompose_radiance(radiance: RGB) -> tuple[tuple[int, int, int], float]:
     if intensity <= 0.0:
         return (0, 0, 0), 1.0
     colour = tuple(
-        round(min(max(component / intensity, 0.0), 1.0) * 255)
-        for component in radiance
+        round(min(max(component / intensity, 0.0), 1.0) * 255) for component in radiance
     )
     return colour, intensity
 
@@ -848,14 +1034,10 @@ def _compose_direction(azimuth_deg: float, elevation_deg: float) -> RGB:
 
 
 def _rgb_int(colour: RGB) -> tuple[int, int, int]:
-    return tuple(
-        round(min(max(component, 0.0), 1.0) * 255) for component in colour
-    )
+    return tuple(round(min(max(component, 0.0), 1.0) * 255) for component in colour)
 
 
-def _fit_preview_to_aspect(
-    pixels: np.ndarray, viewport_aspect: float
-) -> np.ndarray:
+def _fit_preview_to_aspect(pixels: np.ndarray, viewport_aspect: float) -> np.ndarray:
     """Pad an image so viser's stretched background preserves its aspect ratio."""
     height, width = pixels.shape[:2]
     image_aspect = width / height
@@ -928,22 +1110,30 @@ class StageBinder:
                 hint="Higher values allow longer light paths and can render slower.",
             )
         with self.tabs.add_tab("Backdrop"):
-            self.backdrop_enabled = gui.add_checkbox(
-                "enabled", base.backdrop.enabled
-            )
+            self.backdrop_enabled = gui.add_checkbox("enabled", base.backdrop.enabled)
             self.backdrop_pattern = gui.add_dropdown(
                 "pattern", ("checker", "solid"), initial_value=base.backdrop.pattern
             )
             self.backdrop_distance = self._slider(
-                gui, "distance", 0.2, 10.0, base.backdrop.distance_factor,
+                gui,
+                "distance",
+                0.2,
+                10.0,
+                base.backdrop.distance_factor,
                 "backdrop.distance_factor",
             )
             self.backdrop_scale = self._slider(
-                gui, "scale", 0.2, 10.0, base.backdrop.scale_factor,
+                gui,
+                "scale",
+                0.2,
+                10.0,
+                base.backdrop.scale_factor,
                 "backdrop.scale_factor",
             )
             self.backdrop_checker = self._int_slider(
-                gui, "checker tiles", base.backdrop.checker_scale,
+                gui,
+                "checker tiles",
+                base.backdrop.checker_scale,
                 "backdrop.checker_scale",
             )
             self.backdrop_color0 = self._rgb(
@@ -981,11 +1171,19 @@ class StageBinder:
                 gui, "elevation °", -89.0, 89.0, key_elevation, "key_light.direction"
             )
             self.key_distance = self._slider(
-                gui, "distance", 0.5, 10.0, base.key_light.distance_factor,
+                gui,
+                "distance",
+                0.5,
+                10.0,
+                base.key_light.distance_factor,
                 "key_light.distance_factor",
             )
             self.key_scale = self._slider(
-                gui, "scale", 0.1, 5.0, base.key_light.scale_factor,
+                gui,
+                "scale",
+                0.1,
+                5.0,
+                base.key_light.scale_factor,
                 "key_light.scale_factor",
             )
             self.key_colour = self._rgb_raw(
@@ -999,15 +1197,27 @@ class StageBinder:
                 "override camera", base.camera is not None
             )
             self.camera_azimuth = self._slider(
-                gui, "azimuth °", -180.0, 180.0, camera_base.azimuth_deg,
+                gui,
+                "azimuth °",
+                -180.0,
+                180.0,
+                camera_base.azimuth_deg,
                 "camera.azimuth_deg",
             )
             self.camera_elevation = self._slider(
-                gui, "elevation °", -89.0, 89.0, camera_base.elevation_deg,
+                gui,
+                "elevation °",
+                -89.0,
+                89.0,
+                camera_base.elevation_deg,
                 "camera.elevation_deg",
             )
             self.camera_distance = self._slider(
-                gui, "distance", 1.0, 12.0, camera_base.distance_factor,
+                gui,
+                "distance",
+                1.0,
+                12.0,
+                camera_base.distance_factor,
                 "camera.distance_factor",
             )
             self.camera_fov = self._slider(
@@ -1025,17 +1235,25 @@ class StageBinder:
             )
 
         for handle in (
-            self.width, self.height, self.spp, self.max_depth,
-            self.backdrop_enabled, self.backdrop_pattern,
-            self.floor_enabled, self.floor_pattern,
-            self.key_enabled, self.camera_enabled, self.backlight_enabled,
+            self.width,
+            self.height,
+            self.spp,
+            self.max_depth,
+            self.backdrop_enabled,
+            self.backdrop_pattern,
+            self.floor_enabled,
+            self.floor_pattern,
+            self.key_enabled,
+            self.camera_enabled,
+            self.backlight_enabled,
         ):
             handle.on_update(lambda _event: self._notify_change())
 
     def _slider(self, gui, label, low, high, initial, key):
         clamped = min(max(float(initial), low), high)
-        handle = gui.add_slider(label, min=low, max=high, step=0.01,
-                                initial_value=clamped)
+        handle = gui.add_slider(
+            label, min=low, max=high, step=0.01, initial_value=clamped
+        )
         self._track(handle, key)
         return handle
 
@@ -1078,17 +1296,11 @@ class StageBinder:
         """
         camera = config.camera if config.camera is not None else CameraOverride()
         backlight = (
-            config.backlight
-            if config.backlight is not None
-            else BacklightOverride()
+            config.backlight if config.backlight is not None else BacklightOverride()
         )
-        key_colour, key_intensity = _decompose_radiance(
-            config.key_light.radiance
-        )
+        key_colour, key_intensity = _decompose_radiance(config.key_light.radiance)
         back_colour, back_intensity = _decompose_radiance(backlight.radiance)
-        key_azimuth, key_elevation = _decompose_direction(
-            config.key_light.direction
-        )
+        key_azimuth, key_elevation = _decompose_direction(config.key_light.direction)
 
         self._suspend_updates = True
         try:
@@ -1204,15 +1416,18 @@ class StageBinder:
         if self.camera_enabled.value:
             camera = CameraOverride(
                 azimuth_deg=self._value(
-                    "camera.azimuth_deg", self.camera_azimuth,
+                    "camera.azimuth_deg",
+                    self.camera_azimuth,
                     camera_base.azimuth_deg,
                 ),
                 elevation_deg=self._value(
-                    "camera.elevation_deg", self.camera_elevation,
+                    "camera.elevation_deg",
+                    self.camera_elevation,
                     camera_base.elevation_deg,
                 ),
                 distance_factor=self._value(
-                    "camera.distance_factor", self.camera_distance,
+                    "camera.distance_factor",
+                    self.camera_distance,
                     camera_base.distance_factor,
                 ),
                 fov_deg=self._value(
@@ -1230,11 +1445,13 @@ class StageBinder:
                 enabled=self.backdrop_enabled.value,
                 pattern=self.backdrop_pattern.value,
                 distance_factor=self._value(
-                    "backdrop.distance_factor", self.backdrop_distance,
+                    "backdrop.distance_factor",
+                    self.backdrop_distance,
                     base.backdrop.distance_factor,
                 ),
                 scale_factor=self._value(
-                    "backdrop.scale_factor", self.backdrop_scale,
+                    "backdrop.scale_factor",
+                    self.backdrop_scale,
                     base.backdrop.scale_factor,
                 ),
                 checker_scale=(
@@ -1274,11 +1491,13 @@ class StageBinder:
                 enabled=self.key_enabled.value,
                 direction=direction,
                 distance_factor=self._value(
-                    "key_light.distance_factor", self.key_distance,
+                    "key_light.distance_factor",
+                    self.key_distance,
                     base.key_light.distance_factor,
                 ),
                 scale_factor=self._value(
-                    "key_light.scale_factor", self.key_scale,
+                    "key_light.scale_factor",
+                    self.key_scale,
                     base.key_light.scale_factor,
                 ),
                 radiance=key_radiance,
@@ -1304,26 +1523,17 @@ class ViewerApp:
         work_dir.mkdir(parents=True, exist_ok=True)
         self.work_dir = work_dir
 
-        if args.stage_config is not None:
-            initial = stage_config_from_json(args.stage_config)
-        else:
-            initial = StageConfig()
-
         try:
-            self.preset_root = resolve_preset_root(
-                args.preset_root, args.stage_config
-            )
-        except PresetCatalogError as error:
+            startup = _resolve_viewer_startup(args, work_dir)
+        except (InputCatalogError, PresetCatalogError, ViewerSessionError) as error:
             raise SystemExit(str(error)) from error
-        self.applied_preset = self._initial_applied_preset(
-            args.stage_config, initial
-        )
+        initial = startup.initial_config
+        self.preset_root = startup.preset_root
+        self.session_root = startup.session_root
+        self.applied_preset = startup.applied_preset
 
-        self._initial_input_path = args.optical_zarr.resolve()
-        try:
-            self.input_root = resolve_input_root(args.input_root, args.optical_zarr)
-        except InputCatalogError as error:
-            raise SystemExit(str(error)) from error
+        self._initial_input_path = startup.initial_input.resolve()
+        self.input_root = startup.input_root
         if self._initial_input_path.is_relative_to(self.input_root):
             self._initial_sentinel: str | None = None
             self._current_selection = self._initial_input_path.relative_to(
@@ -1339,7 +1549,8 @@ class ViewerApp:
             preview_size=args.preview_size,
             preview_spp=args.preview_spp,
             initial=initial,
-            variant=args.variant,
+            variant=startup.variant,
+            seed=startup.seed,
         )
         self.interactive_spp = args.interactive_spp
         self.worker = RenderWorker(settle_delay=args.settle_delay)
@@ -1386,10 +1597,15 @@ class ViewerApp:
         with self.binder.tabs.add_tab("Output"):
             self.preset_path = gui.add_text("preset path", str(preset_default))
             save_button = gui.add_button("Save preset")
+            self.session_save_path = gui.add_text(
+                "session path (session-root relative)", "viewer.session.json"
+            )
+            self.session_save_button = gui.add_button("Save session")
             self.final_path = gui.add_text("final PNG path", str(final_default))
             render_button = gui.add_button("Render final")
 
         save_button.on_click(lambda _event: self._save_preset())
+        self.session_save_button.on_click(lambda _event: self._queue_save_session())
         render_button.on_click(lambda _event: self._queue_final())
 
         self.worker.configure(
@@ -1403,23 +1619,6 @@ class ViewerApp:
 
     # -- worker-side operations -------------------------------------------
 
-    def _initial_applied_preset(
-        self, stage_config_path: Path | None, config: StageConfig
-    ) -> SessionPresetRef | None:
-        """Return provenance when the startup preset belongs to preset-root."""
-        if stage_config_path is None:
-            return None
-        try:
-            relative = stage_config_path.resolve().relative_to(self.preset_root)
-            candidate = resolve_preset(self.preset_root, relative)
-            loaded = load_preset(candidate)
-        except (OSError, PresetCatalogError, ValueError):
-            return None
-        digest = stage_config_digest(config)
-        if stage_config_digest(loaded) != digest:
-            return None
-        return SessionPresetRef(path=candidate.root_relative, digest=digest)
-
     def _current_session_generation(self) -> int:
         return self.core.session_generation
 
@@ -1429,9 +1628,7 @@ class ViewerApp:
 
     def _schedule_preview(self) -> None:
         self.status.content = "rendering preview…"
-        self.worker.request_preview(
-            self.binder.current(), self.core.session_generation
-        )
+        self.worker.request_preview(self.binder.current(), self.core.session_generation)
 
     def _render_preview(
         self, config: StageConfig, quality: str
@@ -1477,6 +1674,137 @@ class ViewerApp:
         self.status.content = f"preset saved: {path}"
         print(f"PRESET saved {path}")
 
+    def _capture_session(self, path: Path) -> None:
+        selection = self._current_selection
+        if selection == self._initial_sentinel:
+            raise ViewerSessionError("capture", "current input is outside --input-root")
+        candidate = resolve_candidate(self.input_root, Path(selection))
+        if (
+            candidate.optical_zarr.resolve()
+            != self.core.current_session.optical_zarr.resolve()
+        ):
+            raise ViewerSessionError(
+                "capture", "current input selection does not match the live scene"
+            )
+        session = create_viewer_session(
+            candidate,
+            self.binder.current(),
+            self.core.mi.variant(),
+            self.core.current_session.seed,
+            preset=self.applied_preset,
+        )
+        write_viewer_session(path, session)
+
+    def _queue_save_session(self) -> None:
+        self.session_save_button.disabled = True
+        self.status.content = "session save: resolve path…"
+
+        def job() -> None:
+            try:
+                path = _resolve_session_path(
+                    self.session_root,
+                    Path(self.session_save_path.value),
+                    must_exist=False,
+                )
+                self.status.content = "session save: digest input…"
+                self._capture_session(path)
+            except Exception as error:
+                self.status.content = f"**session save failed**: {error}"
+                print(f"SESSION SAVE ERROR {error}", file=sys.stderr)
+            else:
+                self.status.content = f"session saved: {path}"
+                print(f"SESSION saved {path}")
+            finally:
+                self.session_save_button.disabled = False
+
+        self.worker.submit(job)
+
+    def _load_session_transaction(
+        self, path: Path, on_stage: Callable[[str], None]
+    ) -> None:
+        """Verify, prepare, and atomically commit one viewer session."""
+        on_stage("parse")
+        session = viewer_session_from_json(path)
+        resolved = resolve_viewer_session(
+            session,
+            self.input_root,
+            self.preset_root,
+            on_stage=on_stage,
+        )
+        if resolved.variant != self.core.mi.variant():
+            raise ViewerSessionError(
+                "resolve",
+                f"session variant {resolved.variant} differs from running variant "
+                f"{self.core.mi.variant()}; restart the viewer with --session",
+            )
+
+        prepared = self.core.prepare_input_session(
+            self.input_root,
+            Path(session.input.path),
+            resolved.stage_config,
+            self.interactive_spp,
+            seed=resolved.seed,
+            on_stage=lambda stage: on_stage(stage) if stage != "validate" else None,
+        )
+        old_core_session = self.core.current_session
+        old_generation = self.core.session_generation
+        old_config = self.binder.current()
+        old_selection = self._current_selection
+        old_source = self.applied_preset
+        on_stage("commit")
+        try:
+            self.binder.replace_config(resolved.stage_config)
+            self.core.swap_session(prepared)
+            self._current_selection = session.input.path
+            self.input_dropdown.value = session.input.path
+            self.applied_preset = session.preset
+            if session.preset is not None:
+                options = tuple(self.preset_dropdown.options)
+                if session.preset.path in options:
+                    self.preset_dropdown.value = session.preset.path
+        except Exception as error:
+            self.core._session = old_core_session
+            self.core.session_generation = old_generation
+            self._current_selection = old_selection
+            self.applied_preset = old_source
+            try:
+                self.binder.replace_config(old_config)
+                self.input_dropdown.value = old_selection
+            finally:
+                _discard_session_dir(prepared.work_dir)
+            raise ViewerSessionError("commit", str(error)) from error
+
+    def _queue_load_session(self) -> None:
+        self.session_load_button.disabled = True
+        self.status.content = "session load: resolve path…"
+
+        def on_stage(stage: str) -> None:
+            self.status.content = f"session load: {stage}…"
+
+        def job() -> None:
+            try:
+                path = _resolve_session_path(
+                    self.session_root,
+                    Path(self.session_load_path.value),
+                    must_exist=True,
+                )
+                self._load_session_transaction(path, on_stage)
+            except (InputLoadError, ViewerSessionError) as error:
+                self.status.content = f"**session load failed**: {error}"
+                print(f"SESSION LOAD ERROR {error}", file=sys.stderr)
+            except Exception as error:
+                self.status.content = f"**session load failed**: {error}"
+                print(f"SESSION LOAD ERROR {error}", file=sys.stderr)
+            else:
+                self.status.content = "session loaded"
+                self._update_input_summary()
+                self._update_preset_summary()
+                self._schedule_preview()
+            finally:
+                self.session_load_button.disabled = False
+
+        self.worker.submit(job)
+
     def _queue_final(self) -> None:
         config = self.binder.current()
         path = Path(self.final_path.value)
@@ -1486,9 +1814,7 @@ class ViewerApp:
             started = time.perf_counter()
             stats = self.core.render_final(config, path)
             elapsed = time.perf_counter() - started
-            self.status.content = (
-                f"final {elapsed:.1f}s → {path} — PIXELSTATS {stats}"
-            )
+            self.status.content = f"final {elapsed:.1f}s → {path} — PIXELSTATS {stats}"
             print(f"FINAL {path} PIXELSTATS {stats}")
 
         self.worker.submit(job)
@@ -1543,15 +1869,11 @@ class ViewerApp:
         )
         self.preset_apply_button = gui.add_button("Apply stage preset")
 
-        self.preset_dropdown.on_update(
-            lambda _event: self._update_preset_summary()
-        )
+        self.preset_dropdown.on_update(lambda _event: self._update_preset_summary())
         self.preset_refresh_button.on_click(
             lambda _event: self._refresh_preset_catalog()
         )
-        self.preset_apply_button.on_click(
-            lambda _event: self._apply_stage_preset()
-        )
+        self.preset_apply_button.on_click(lambda _event: self._apply_stage_preset())
 
     def _update_preset_summary(self) -> None:
         self.preset_summary.content = self._describe_preset_selection(
@@ -1564,9 +1886,7 @@ class ViewerApp:
         self.preset_dropdown.options = tuple(options)
         if previous not in options:
             applied_path = (
-                self.applied_preset.path
-                if self.applied_preset is not None
-                else None
+                self.applied_preset.path if self.applied_preset is not None else None
             )
             self.preset_dropdown.value = (
                 applied_path if applied_path in options else options[0]
@@ -1603,9 +1923,7 @@ class ViewerApp:
 
     def _root_and_path_for(self, selection: str) -> tuple[Path, Path]:
         if selection == self._initial_sentinel:
-            return self._initial_input_path.parent, Path(
-                self._initial_input_path.name
-            )
+            return self._initial_input_path.parent, Path(self._initial_input_path.name)
         return self.input_root, Path(selection)
 
     def _dropdown_options(self) -> list[str]:
@@ -1650,17 +1968,18 @@ class ViewerApp:
             self._describe_selection(self._current_selection)
         )
         self.input_load_button = gui.add_button("Load / Rebuild")
+        self.session_load_path = gui.add_text(
+            "session path (session-root relative)", "viewer.session.json"
+        )
+        self.session_load_button = gui.add_button("Load session")
 
         self.input_dropdown.on_update(lambda _event: self._update_input_summary())
-        self.input_refresh_button.on_click(
-            lambda _event: self._refresh_input_catalog()
-        )
+        self.input_refresh_button.on_click(lambda _event: self._refresh_input_catalog())
         self.input_load_button.on_click(lambda _event: self._queue_load_input())
+        self.session_load_button.on_click(lambda _event: self._queue_load_session())
 
     def _update_input_summary(self) -> None:
-        self.input_summary.content = self._describe_selection(
-            self.input_dropdown.value
-        )
+        self.input_summary.content = self._describe_selection(self.input_dropdown.value)
 
     def _refresh_input_catalog(self) -> None:
         options = self._dropdown_options()

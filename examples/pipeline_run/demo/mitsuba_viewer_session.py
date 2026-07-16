@@ -17,6 +17,7 @@ import json
 import os
 import re
 import tempfile
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -99,9 +100,7 @@ _EFFECTIVE_SECTION_KEYS = {
     ),
 }
 _EFFECTIVE_OVERRIDE_KEYS = {
-    "camera": frozenset(
-        {"azimuth_deg", "elevation_deg", "distance_factor", "fov_deg"}
-    ),
+    "camera": frozenset({"azimuth_deg", "elevation_deg", "distance_factor", "fov_deg"}),
     "backlight": frozenset({"radiance"}),
 }
 
@@ -129,9 +128,7 @@ class SessionInputRef:
         _digest(self.optical_sha256, field="input.optical_sha256")
         if self.kind is InputKind.RUN_BUNDLE:
             if self.run_manifest_sha256 is None:
-                raise ValueError(
-                    "input.run_manifest_sha256 is required for run-bundle"
-                )
+                raise ValueError("input.run_manifest_sha256 is required for run-bundle")
             _digest(
                 self.run_manifest_sha256,
                 field="input.run_manifest_sha256",
@@ -177,13 +174,9 @@ class ViewerSession:
                 f"expected {self.effective_digest}, actual {actual_digest}"
             )
         if self.preset is not None and self.preset.digest != self.effective_digest:
-            raise ValueError(
-                "stage.preset.digest must match stage.effective_digest"
-            )
+            raise ValueError("stage.preset.digest must match stage.effective_digest")
         if self.variant not in _VARIANTS:
-            raise ValueError(
-                f"mitsuba.variant must be one of {sorted(_VARIANTS)!r}"
-            )
+            raise ValueError(f"mitsuba.variant must be one of {sorted(_VARIANTS)!r}")
         if isinstance(self.seed, bool) or not isinstance(self.seed, int):
             raise TypeError("mitsuba.seed must be an integer")
         if self.seed < 0:
@@ -340,8 +333,11 @@ def resolve_viewer_session(
     session: ViewerSession,
     input_root: Path,
     preset_root: Path | None = None,
+    *,
+    on_stage: Callable[[str], None] = lambda _stage: None,
 ) -> ResolvedViewerSession:
     """Resolve root-relative references and verify every declared digest."""
+    on_stage("resolve")
     try:
         candidate = resolve_candidate(input_root, Path(session.input.path))
     except (InputCatalogError, OSError) as error:
@@ -353,6 +349,7 @@ def resolve_viewer_session(
             f"expected {session.input.kind.value}, actual {candidate.kind.value}",
         )
 
+    on_stage("verify")
     try:
         actual_optical_digest = zarr_store_sha256(candidate.optical_zarr)
     except OSError as error:
@@ -397,9 +394,7 @@ def _parse_input(value: object) -> SessionInputRef:
     try:
         kind = InputKind(kind_value)
     except (TypeError, ValueError) as error:
-        raise ValueError(
-            "input.kind must be 'run-bundle' or 'optical-zarr'"
-        ) from error
+        raise ValueError("input.kind must be 'run-bundle' or 'optical-zarr'") from error
     required = {"kind", "path", "optical_sha256"}
     if kind is InputKind.RUN_BUNDLE:
         required.add("run_manifest_sha256")

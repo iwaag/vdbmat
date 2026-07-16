@@ -33,6 +33,8 @@ from mitsuba_stage_viewer import (  # noqa: E402
     _parse_args,
     _preview_stage_config,
     _resolve_initial_optical_zarr,
+    _resolve_session_path,
+    _resolve_session_root,
     _session_work_dir,
     _slug_for,
     _structure_key,
@@ -106,9 +108,7 @@ class _FakeGui:
     ) -> _FakeHandle:
         return _FakeHandle(initial_value)
 
-    def add_rgb(
-        self, _label: str, *, initial_value: object
-    ) -> _FakeHandle:
+    def add_rgb(self, _label: str, *, initial_value: object) -> _FakeHandle:
         return _FakeHandle(initial_value)
 
 
@@ -227,6 +227,75 @@ def test_viewer_cli_input_root_defaults_to_none() -> None:
     assert args.input_root is None
 
 
+def test_viewer_cli_accepts_session_root_seed_and_startup_session() -> None:
+    args = _parse_args(
+        [
+            "--session",
+            "saved.session.json",
+            "--input-root",
+            "/inputs",
+            "--session-root",
+            "/sessions",
+            "--seed",
+            "37",
+        ]
+    )
+
+    assert args.optical_zarr is None
+    assert args.session == Path("saved.session.json")
+    assert args.session_root == Path("/sessions")
+    assert args.seed == 37
+    assert args.variant is None
+
+
+def test_viewer_cli_rejects_missing_or_conflicting_session_inputs() -> None:
+    invalid = (
+        [],
+        ["--session", "saved.json"],
+        ["input.zarr", "--session", "saved.json", "--input-root", "/inputs"],
+        [
+            "--session",
+            "saved.json",
+            "--input-root",
+            "/inputs",
+            "--stage-config",
+            "stage.json",
+        ],
+        ["input.zarr", "--seed", "-1"],
+    )
+    for argv in invalid:
+        try:
+            _parse_args(argv)
+        except SystemExit as error:
+            assert error.code == 2
+        else:
+            raise AssertionError(f"invalid CLI was accepted: {argv}")
+
+
+def test_session_paths_are_root_relative_and_contained(tmp_path: Path) -> None:
+    root = tmp_path / "sessions"
+    root.mkdir()
+    existing = root / "saved.json"
+    existing.write_text("{}", encoding="utf-8")
+
+    assert _resolve_session_root(root, None, tmp_path) == root.resolve()
+    assert _resolve_session_path(root, Path("saved.json"), must_exist=True) == (
+        existing.resolve()
+    )
+    assert (
+        _resolve_session_path(root, Path("nested/new.json"), must_exist=False)
+        == (root / "nested/new.json").resolve()
+    )
+
+    for invalid in (Path("/absolute.json"), Path("../escape.json"), Path(".")):
+        try:
+            _resolve_session_path(root, invalid, must_exist=False)
+        except Exception as error:
+            assert "session" in str(error)
+        else:
+            raise AssertionError(f"escaping session path was accepted: {invalid}")
+
+
 def test_resolve_initial_optical_zarr_passes_through_bare_store(
     tmp_path: Path,
 ) -> None:
@@ -269,12 +338,8 @@ def test_preview_override_preserves_max_depth() -> None:
 
     preview = _preview_stage_config(config, preview_size=192, preview_spp=4)
 
-    assert preview.render == RenderSettings(
-        width=192, height=192, spp=4, max_depth=18
-    )
-    assert config.render == RenderSettings(
-        width=640, height=480, spp=64, max_depth=18
-    )
+    assert preview.render == RenderSettings(width=192, height=192, spp=4, max_depth=18)
+    assert config.render == RenderSettings(width=640, height=480, spp=64, max_depth=18)
 
 
 def test_max_depth_changes_structure_and_final_cache_keys() -> None:
@@ -307,9 +372,7 @@ def test_stage_binder_max_depth_widget_and_preset_round_trip(
     current = binder.current()
 
     assert changes == ["changed"]
-    assert current.render == RenderSettings(
-        width=320, height=240, spp=32, max_depth=21
-    )
+    assert current.render == RenderSettings(width=320, height=240, spp=32, max_depth=21)
 
     preset_path = tmp_path / "viewer.stage.json"
     StageCore.save_preset(current, preset_path)
@@ -463,9 +526,7 @@ def test_apply_broken_preset_preserves_config_source_and_preview(
         path="original.stage.json",
         digest="sha256:" + "b" * 64,
     )
-    binder = StageBinder(
-        SimpleNamespace(gui=_FakeGui()), original, lambda: None
-    )
+    binder = StageBinder(SimpleNamespace(gui=_FakeGui()), original, lambda: None)
     app = ViewerApp.__new__(ViewerApp)
     app.preset_root = preset_root
     app.preset_dropdown = SimpleNamespace(value="broken.stage.json")
