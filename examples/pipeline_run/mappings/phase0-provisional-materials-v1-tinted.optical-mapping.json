@@ -1,0 +1,134 @@
+{
+  "format": "vdbmat.optical-mapping",
+  "format_version": "1.0.0",
+  "configuration_id": "phase0-provisional-materials-v1-tinted",
+  "version": "1.0.0",
+  "optical_basis": {
+    "kind": "rgb",
+    "identifier": "linear-srgb-effective-v1",
+    "coordinates": [
+      "R",
+      "G",
+      "B"
+    ],
+    "reference_white": "D65",
+    "observer": "CIE-1931-2deg",
+    "transfer": "linear"
+  },
+  "mixing_rule": "linear-volume-fraction-v1",
+  "calibration_status": "provisional-uncalibrated",
+  "materials": [
+    {
+      "material_id": 0,
+      "name": "air",
+      "sigma_a_rgb_per_m": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "sigma_s_rgb_per_m": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "g": 0.0,
+      "ior": 1.0
+    },
+    {
+      "material_id": 1,
+      "name": "transparent-resin",
+      "sigma_a_rgb_per_m": [
+        45.0,
+        4.0,
+        1.0
+      ],
+      "sigma_s_rgb_per_m": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "g": 0.0,
+      "ior": 1.48
+    },
+    {
+      "material_id": 2,
+      "name": "white-resin",
+      "sigma_a_rgb_per_m": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "sigma_s_rgb_per_m": [
+        1000.0,
+        1000.0,
+        1000.0
+      ],
+      "g": 0.2,
+      "ior": 1.52
+    },
+    {
+      "material_id": 3,
+      "name": "black-opaque-resin",
+      "sigma_a_rgb_per_m": [
+        4000.0,
+        5000.0,
+        6000.0
+      ],
+      "sigma_s_rgb_per_m": [
+        100.0,
+        100.0,
+        100.0
+      ],
+      "g": 0.1,
+      "ior": 1.52
+    },
+    {
+      "material_id": 10,
+      "name": "axis-x-diagnostic",
+      "sigma_a_rgb_per_m": [
+        0.0,
+        100.0,
+        100.0
+      ],
+      "sigma_s_rgb_per_m": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "g": 0.0,
+      "ior": 1.0
+    },
+    {
+      "material_id": 20,
+      "name": "axis-y-diagnostic",
+      "sigma_a_rgb_per_m": [
+        100.0,
+        0.0,
+        100.0
+      ],
+      "sigma_s_rgb_per_m": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "g": 0.0,
+      "ior": 1.0
+    },
+    {
+      "material_id": 30,
+      "name": "axis-z-diagnostic",
+      "sigma_a_rgb_per_m": [
+        100.0,
+        100.0,
+        0.0
+      ],
+      "sigma_s_rgb_per_m": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "g": 0.0,
+      "ior": 1.0
+    }
+  ]
+}

@@ -80,9 +80,7 @@ def test_locate_bundle_source_rejects_tampered_run_manifest(
 ) -> None:
     run_json_path = coupon_bundle / "run.json"
     run_manifest = json.loads(run_json_path.read_text())
-    run_manifest["input_payload_sha256"] = (
-        "sha256:" + "0" * 64
-    )
+    run_manifest["input_payload_sha256"] = "sha256:" + "0" * 64
     run_json_path.write_text(json.dumps(run_manifest))
 
     with pytest.raises(RegenError, match="digest mismatch") as excinfo:
@@ -178,6 +176,26 @@ def test_regenerate_optical_reuses_cache_on_repeat_call(
     assert run_json_path.stat().st_mtime_ns == first_mtime_ns
 
 
+def test_regenerate_optical_is_digest_stable_across_work_roots(
+    coupon_bundle: Path, tmp_path: Path
+) -> None:
+    mapping = _write_mapping(
+        tmp_path / "mapping.optical-mapping.json", _builtin_document()
+    )
+
+    first = regenerate_optical(coupon_bundle, mapping, tmp_path / "viewer-derived")
+    second = regenerate_optical(coupon_bundle, mapping, tmp_path / "headless-derived")
+
+    assert first.bundle_path.parent != second.bundle_path.parent
+    assert zarr_store_sha256(first.optical_zarr) == zarr_store_sha256(
+        second.optical_zarr
+    )
+    first_config = json.loads((first.bundle_path / "config.json").read_text())
+    second_config = json.loads((second.bundle_path / "config.json").read_text())
+    assert first_config == second_config
+    assert first_config["output"]["path"] == first.bundle_path.name
+
+
 def test_regenerate_optical_recomputes_after_mapping_edit(
     coupon_bundle: Path, tmp_path: Path
 ) -> None:
@@ -209,9 +227,7 @@ def test_derived_bundle_key_changes_with_either_input() -> None:
 def test_regenerate_optical_two_mappings_produce_different_optical_digest(
     coupon_bundle: Path, tmp_path: Path
 ) -> None:
-    mapping_a = _write_mapping(
-        tmp_path / "a.optical-mapping.json", _builtin_document()
-    )
+    mapping_a = _write_mapping(tmp_path / "a.optical-mapping.json", _builtin_document())
     tinted = _builtin_document()
     tinted["materials"][1]["sigma_a_rgb_per_m"] = [9.0, 9.0, 9.0]
     mapping_b = _write_mapping(tmp_path / "b.optical-mapping.json", tinted)

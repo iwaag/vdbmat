@@ -49,6 +49,7 @@ digest, or effective config:
     uv run --group mitsuba python \
         examples/pipeline_run/demo/mitsuba_stage_demo.py -- \
         --session SESSION.json --input-root ROOT [--preset-root ROOT] \
+        [--mapping-root ROOT --mapping-work-root WORK_ROOT] \
         --output-png OUTPUT.png
 
 Session replay resolves the input/preset references and verifies every
@@ -70,10 +71,13 @@ from types import ModuleType
 import numpy as np
 from mitsuba_stage import StageConfig, apply_stage, stage_config_from_json
 from mitsuba_stage_inputs import resolve_input_root
+from mitsuba_stage_mappings import MappingCatalogError, resolve_mapping_root
 from mitsuba_stage_presets import resolve_preset_root
+from mitsuba_stage_regen import RegenError, regenerate_optical
 from mitsuba_viewer_session import (
     ViewerSessionError,
     resolve_viewer_session,
+    verify_derived_optical,
     viewer_session_from_json,
 )
 
@@ -163,6 +167,20 @@ def _parse_args() -> argparse.Namespace:
         "resolves against (required if the session records one)",
     )
     parser.add_argument(
+        "--mapping-root",
+        type=Path,
+        default=None,
+        help="server-local root the session's optional optical mapping path "
+        "resolves against (required for a mapping-bearing session)",
+    )
+    parser.add_argument(
+        "--mapping-work-root",
+        type=Path,
+        default=None,
+        help="directory for regenerated mapping-derived run bundles "
+        "(required for a mapping-bearing session)",
+    )
+    parser.add_argument(
         "--output-png",
         dest="session_output_png",
         type=Path,
@@ -180,10 +198,13 @@ def _parse_args() -> argparse.Namespace:
         if (
             args.input_root is not None
             or args.preset_root is not None
+            or args.mapping_root is not None
+            or args.mapping_work_root is not None
             or args.session_output_png is not None
         ):
             parser.error(
-                "--input-root/--preset-root/--output-png require --session"
+                "--input-root/--preset-root/--mapping-root/--mapping-work-root/"
+                "--output-png require --session"
             )
     else:
         if args.optical_zarr is not None or args.output_png is not None:
@@ -194,6 +215,8 @@ def _parse_args() -> argparse.Namespace:
             parser.error("--input-root is required with --session")
         if args.session_output_png is None:
             parser.error("--output-png is required with --session")
+        if (args.mapping_root is None) != (args.mapping_work_root is None):
+            parser.error("--mapping-root and --mapping-work-root must be used together")
         if args.stage_config is not None:
             parser.error("--stage-config cannot be used with --session")
         if any(
@@ -306,7 +329,20 @@ def _resolve_session(
         raise ViewerSessionError(
             "resolve", "stage preset reference requires --preset-root"
         )
-    resolved = resolve_viewer_session(session, input_root, preset_root)
+    mapping_root: Path | None = None
+    if session.mapping is not None:
+        if args.mapping_root is None or args.mapping_work_root is None:
+            raise ViewerSessionError(
+                "resolve",
+                "mapping-bearing session requires --mapping-root and "
+                "--mapping-work-root",
+            )
+        try:
+            mapping_root = resolve_mapping_root(args.mapping_root)
+        except MappingCatalogError as error:
+            raise ViewerSessionError("resolve", str(error)) from error
+        _require_disjoint_roots(args.mapping_work_root, input_root)
+    resolved = resolve_viewer_session(session, input_root, preset_root, mapping_root)
     if args.variant is not None and args.variant != resolved.variant:
         raise ViewerSessionError(
             "resolve",
@@ -317,13 +353,46 @@ def _resolve_session(
         raise ViewerSessionError(
             "resolve", f"--seed {args.seed} does not match session seed {resolved.seed}"
         )
+    optical_zarr = resolved.optical_zarr
+    if resolved.session.mapping is not None:
+        assert resolved.mapping_candidate is not None
+        assert args.mapping_work_root is not None
+        try:
+            derived = regenerate_optical(
+                resolved.input_candidate.path,
+                resolved.mapping_candidate,
+                args.mapping_work_root,
+            )
+        except RegenError as error:
+            raise ViewerSessionError(error.stage, error.message) from error
+        verify_derived_optical(resolved, derived.optical_zarr)
+        optical_zarr = derived.optical_zarr
+        cache_status = "reused" if derived.reused else "generated"
+        print(
+            f"MAPPING {resolved.session.mapping.path} "
+            f"digest={derived.mapping_digest} cache={cache_status}"
+        )
     return (
-        resolved.optical_zarr,
+        optical_zarr,
         args.session_output_png,
         resolved.stage_config,
         resolved.variant,
         resolved.seed,
     )
+
+
+def _require_disjoint_roots(mapping_work_root: Path, input_root: Path) -> None:
+    resolved_work = mapping_work_root.resolve()
+    resolved_input = input_root.resolve()
+    if (
+        resolved_work == resolved_input
+        or resolved_work.is_relative_to(resolved_input)
+        or resolved_input.is_relative_to(resolved_work)
+    ):
+        raise ViewerSessionError(
+            "resolve",
+            "--mapping-work-root and --input-root must not overlap",
+        )
 
 
 def main() -> None:

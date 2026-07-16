@@ -185,6 +185,181 @@ def test_parse_args_legacy_mode_rejects_session_only_flags(
         mitsuba_stage_demo._parse_args()
 
 
+def test_parse_args_session_mode_accepts_mapping_roots(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "mitsuba_stage_demo",
+            "--session",
+            "s.json",
+            "--input-root",
+            "inputs",
+            "--mapping-root",
+            "mappings",
+            "--mapping-work-root",
+            "derived",
+            "--output-png",
+            "out.png",
+        ],
+    )
+
+    args = mitsuba_stage_demo._parse_args()
+
+    assert args.mapping_root == Path("mappings")
+    assert args.mapping_work_root == Path("derived")
+
+
+@pytest.mark.parametrize("flag", ["--mapping-root", "--mapping-work-root"])
+def test_parse_args_session_mode_requires_mapping_roots_as_pair(
+    monkeypatch: pytest.MonkeyPatch, flag: str
+) -> None:
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "mitsuba_stage_demo",
+            "--session",
+            "s.json",
+            "--input-root",
+            "inputs",
+            flag,
+            "value",
+            "--output-png",
+            "out.png",
+        ],
+    )
+
+    with pytest.raises(SystemExit):
+        mitsuba_stage_demo._parse_args()
+
+
+def test_resolve_mapping_session_regenerates_and_verifies_derived_optical(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from mitsuba_stage import StageConfig
+
+    mapping_ref = SimpleNamespace(path="tinted.optical-mapping.json")
+    session = SimpleNamespace(preset=None, mapping=mapping_ref)
+    stage = StageConfig()
+    resolved = SimpleNamespace(
+        session=session,
+        optical_zarr=tmp_path / "inputs/bundle/optical.zarr",
+        input_candidate=SimpleNamespace(path=tmp_path / "inputs/bundle"),
+        mapping_candidate=SimpleNamespace(path=tmp_path / "mappings/tinted.json"),
+        stage_config=stage,
+        variant="llvm_ad_rgb",
+        seed=42,
+    )
+    derived = SimpleNamespace(
+        optical_zarr=tmp_path / "derived/bundle/optical.zarr",
+        mapping_digest="sha256:" + "1" * 64,
+        reused=False,
+    )
+    args = argparse.Namespace(
+        session=tmp_path / "viewer.session.json",
+        input_root=tmp_path / "inputs",
+        preset_root=None,
+        mapping_root=tmp_path / "mappings",
+        mapping_work_root=tmp_path / "derived",
+        session_output_png=tmp_path / "out.png",
+        variant=None,
+        seed=None,
+    )
+    verified: list[Path] = []
+
+    monkeypatch.setattr(
+        mitsuba_stage_demo, "viewer_session_from_json", lambda _path: session
+    )
+    monkeypatch.setattr(
+        mitsuba_stage_demo,
+        "resolve_input_root",
+        lambda _cli, _initial: tmp_path / "inputs",
+    )
+    monkeypatch.setattr(
+        mitsuba_stage_demo,
+        "resolve_preset_root",
+        lambda _cli, _initial: tmp_path / "presets",
+    )
+    monkeypatch.setattr(
+        mitsuba_stage_demo,
+        "resolve_mapping_root",
+        lambda _cli: tmp_path / "mappings",
+    )
+    monkeypatch.setattr(
+        mitsuba_stage_demo,
+        "resolve_viewer_session",
+        lambda *_args, **_kwargs: resolved,
+    )
+    monkeypatch.setattr(
+        mitsuba_stage_demo,
+        "regenerate_optical",
+        lambda *_args, **_kwargs: derived,
+    )
+    monkeypatch.setattr(
+        mitsuba_stage_demo,
+        "verify_derived_optical",
+        lambda _resolved, path: verified.append(path),
+    )
+
+    optical_zarr, output_png, actual_stage, variant, seed = (
+        mitsuba_stage_demo._resolve_session(args)
+    )
+
+    assert optical_zarr == derived.optical_zarr
+    assert output_png == args.session_output_png
+    assert actual_stage is stage
+    assert variant == "llvm_ad_rgb"
+    assert seed == 42
+    assert verified == [derived.optical_zarr]
+
+
+def test_resolve_mapping_session_requires_mapping_roots(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    session = SimpleNamespace(preset=None, mapping=SimpleNamespace(path="mapping.json"))
+    args = argparse.Namespace(
+        session=tmp_path / "viewer.session.json",
+        input_root=tmp_path / "inputs",
+        preset_root=None,
+        mapping_root=None,
+        mapping_work_root=None,
+        session_output_png=tmp_path / "out.png",
+        variant=None,
+        seed=None,
+    )
+    monkeypatch.setattr(
+        mitsuba_stage_demo, "viewer_session_from_json", lambda _path: session
+    )
+    monkeypatch.setattr(
+        mitsuba_stage_demo,
+        "resolve_input_root",
+        lambda _cli, _initial: tmp_path / "inputs",
+    )
+    monkeypatch.setattr(
+        mitsuba_stage_demo,
+        "resolve_preset_root",
+        lambda _cli, _initial: tmp_path / "presets",
+    )
+
+    with pytest.raises(
+        mitsuba_stage_demo.ViewerSessionError,
+        match="requires --mapping-root and --mapping-work-root",
+    ):
+        mitsuba_stage_demo._resolve_session(args)
+
+
+def test_headless_mapping_work_root_must_not_overlap_input_root(
+    tmp_path: Path,
+) -> None:
+    input_root = tmp_path / "inputs"
+
+    with pytest.raises(mitsuba_stage_demo.ViewerSessionError, match="must not overlap"):
+        mitsuba_stage_demo._require_disjoint_roots(input_root / "derived", input_root)
+
+
 def test_main_session_mode_replays_resolved_session(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -206,10 +381,13 @@ def test_main_session_mode_replays_resolved_session(
         session=tmp_path / "viewer.session.json",
         input_root=tmp_path / "inputs",
         preset_root=None,
+        mapping_root=None,
+        mapping_work_root=None,
         session_output_png=tmp_path / "replay.png",
     )
     stage = StageConfig()
     resolved = SimpleNamespace(
+        session=SimpleNamespace(mapping=None),
         optical_zarr=tmp_path / "inputs" / "case" / "optical.zarr",
         stage_config=stage,
         variant="llvm_ad_rgb",
@@ -235,7 +413,7 @@ def test_main_session_mode_replays_resolved_session(
     monkeypatch.setattr(
         mitsuba_stage_demo,
         "viewer_session_from_json",
-        lambda _path: SimpleNamespace(preset=None),
+        lambda _path: SimpleNamespace(preset=None, mapping=None),
     )
     monkeypatch.setattr(
         mitsuba_stage_demo,
@@ -280,9 +458,12 @@ def test_main_session_mode_rejects_variant_mismatch(
         session=tmp_path / "viewer.session.json",
         input_root=tmp_path / "inputs",
         preset_root=None,
+        mapping_root=None,
+        mapping_work_root=None,
         session_output_png=tmp_path / "replay.png",
     )
     resolved = SimpleNamespace(
+        session=SimpleNamespace(mapping=None),
         optical_zarr=tmp_path / "inputs" / "case" / "optical.zarr",
         stage_config=StageConfig(),
         variant="llvm_ad_rgb",
@@ -293,7 +474,7 @@ def test_main_session_mode_rejects_variant_mismatch(
     monkeypatch.setattr(
         mitsuba_stage_demo,
         "viewer_session_from_json",
-        lambda _path: SimpleNamespace(preset=None),
+        lambda _path: SimpleNamespace(preset=None, mapping=None),
     )
     monkeypatch.setattr(
         mitsuba_stage_demo,
@@ -356,6 +537,8 @@ def test_main_propagates_effective_max_depth_to_export_and_log(
         session=None,
         input_root=None,
         preset_root=None,
+        mapping_root=None,
+        mapping_work_root=None,
         session_output_png=None,
     )
     volume = map_material_volume_to_optical(

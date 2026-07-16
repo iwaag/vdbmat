@@ -9,6 +9,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
+from vdbmat.core.volumes import OpticalPropertyVolume
 from vdbmat.exporters.mitsuba import MitsubaExportConfig, prepare_mitsuba_scene
 from vdbmat.fixtures import (
     homogeneous_transparent,
@@ -16,6 +17,7 @@ from vdbmat.fixtures import (
     write_phase1_fixtures,
 )
 from vdbmat.io import read_material_label_manifest, write_volume
+from vdbmat.io.zarr import read_volume
 from vdbmat.optics import (
     load_optical_mapping,
     map_material_volume_to_optical,
@@ -330,6 +332,18 @@ def _write_pipeline_bundle(root: Path, name: str) -> Path:
     )
     result = run_pipeline(config, base_dir=str(fixtures_dir))
     return result.output_path
+
+
+def _write_nested_material_cube_bundle(root: Path, name: str) -> Path:
+    repository = Path(__file__).parents[2]
+    inputs = repository / "examples/pipeline_run/inputs"
+    config = PipelineConfig(
+        input_kind="direct-voxel",
+        input_path="nested_material_cube.voxels.json",
+        output_path=str(root / name),
+        mapping_name="phase0-provisional-materials-v1",
+    )
+    return run_pipeline(config, base_dir=str(inputs)).output_path
 
 
 def _write_mapping_document(path: Path, *, tint: bool = False) -> None:
@@ -1402,3 +1416,139 @@ def test_resolve_viewer_startup_rejects_overlapping_mapping_work_root(
 
     with pytest.raises(ViewerSessionError, match="overlap"):
         mitsuba_stage_viewer._resolve_viewer_startup(args, tmp_path / "work")
+
+
+def test_checked_in_mappings_switch_nested_cube_as_is_and_back(
+    tmp_path: Path,
+) -> None:
+    repository = Path(__file__).parents[2]
+    mapping_root = repository / "examples/pipeline_run/mappings"
+    root = tmp_path / "inputs"
+    bundle = _write_nested_material_cube_bundle(root, "nested-cube")
+    stage = StageConfig(render=RenderSettings(width=8, height=8, spp=1))
+    core = StageCore(
+        bundle / "optical.zarr",
+        tmp_path / "viewer-work",
+        preview_size=8,
+        preview_spp=1,
+        initial=stage,
+    )
+    app = mitsuba_stage_viewer.ViewerApp.__new__(mitsuba_stage_viewer.ViewerApp)
+    app.core = core
+    app.input_root = root
+    app.mapping_root = mapping_root
+    app.mapping_work_root = tmp_path / "derived"
+    app.interactive_spp = 1
+    app._initial_input_path = (bundle / "optical.zarr").resolve()
+    app._initial_sentinel = None
+
+    as_is_digest = zarr_store_sha256(bundle / "optical.zarr")
+    tinted = app._load_input_transaction(
+        "nested-cube",
+        "phase0-provisional-materials-v1-tinted.optical-mapping.json",
+        stage,
+        lambda _stage: None,
+    )
+    assert tinted is not None
+    tinted_digest = zarr_store_sha256(core.current_session.optical_zarr)
+    assert tinted_digest != as_is_digest
+
+    derivation = app._load_input_transaction(
+        "nested-cube",
+        mitsuba_stage_viewer._AS_IS_MAPPING,
+        stage,
+        lambda _stage: None,
+    )
+    assert derivation is None
+    assert zarr_store_sha256(core.current_session.optical_zarr) == as_is_digest
+
+    provisional = app._load_input_transaction(
+        "nested-cube",
+        "phase0-provisional-materials-v1.optical-mapping.json",
+        stage,
+        lambda _stage: None,
+    )
+    assert provisional is not None
+    original_volume = read_volume(bundle / "optical.zarr")
+    provisional_volume = read_volume(core.current_session.optical_zarr)
+    assert isinstance(original_volume, OpticalPropertyVolume)
+    assert isinstance(provisional_volume, OpticalPropertyVolume)
+    assert np.array_equal(original_volume.sigma_a, provisional_volume.sigma_a)
+    assert np.array_equal(original_volume.sigma_s, provisional_volume.sigma_s)
+
+
+def test_mapping_session_viewer_final_matches_headless_with_and_without_cache(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    repository = Path(__file__).parents[2]
+    mapping_root = repository / "examples/pipeline_run/mappings"
+    root = tmp_path / "inputs"
+    bundle = _write_nested_material_cube_bundle(root, "nested-cube")
+    mapping_candidate = resolve_mapping_candidate(
+        mapping_root,
+        Path("phase0-provisional-materials-v1-tinted.optical-mapping.json"),
+    )
+    viewer_derived = regenerate_optical(
+        bundle, mapping_candidate, tmp_path / "viewer-derived"
+    )
+    stage = StageConfig(
+        render=RenderSettings(width=12, height=12, spp=2, max_depth=11),
+        camera=CameraOverride(azimuth_deg=-12.0),
+    )
+    seed = 4242
+    session = create_viewer_session(
+        resolve_candidate(root, Path("nested-cube")),
+        stage,
+        "llvm_ad_rgb",
+        seed,
+        mapping=SessionMappingRef(
+            path=mapping_candidate.root_relative,
+            digest=viewer_derived.mapping_digest,
+            derived_optical_sha256=zarr_store_sha256(viewer_derived.optical_zarr),
+        ),
+    )
+    session_path = tmp_path / "mapping.session.json"
+    write_viewer_session(session_path, session)
+
+    viewer_png = tmp_path / "viewer.png"
+    core = StageCore(
+        viewer_derived.optical_zarr,
+        tmp_path / "viewer-work",
+        preview_size=12,
+        preview_spp=1,
+        initial=stage,
+        seed=seed,
+    )
+    core.render_final(stage, viewer_png)
+    viewer_pixels = np.asarray(mi.Bitmap(str(viewer_png)))
+
+    headless_work = tmp_path / "headless-derived"
+    rendered: list[np.ndarray] = []
+    for index, expected_cache in enumerate(("generated", "reused"), start=1):
+        output_png = tmp_path / f"headless-{index}.png"
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "mitsuba_stage_demo",
+                "--session",
+                str(session_path),
+                "--input-root",
+                str(root),
+                "--mapping-root",
+                str(mapping_root),
+                "--mapping-work-root",
+                str(headless_work),
+                "--output-png",
+                str(output_png),
+            ],
+        )
+        mitsuba_stage_demo.main()
+        output = capsys.readouterr().out
+        assert f"cache={expected_cache}" in output
+        rendered.append(np.asarray(mi.Bitmap(str(output_png))))
+
+    assert np.array_equal(viewer_pixels, rendered[0])
+    assert np.array_equal(viewer_pixels, rendered[1])

@@ -127,9 +127,7 @@ def locate_bundle_source(bundle_path: Path) -> tuple[Path, str]:
 
     declared_payload_sha256 = run_manifest.get("input_payload_sha256")
     if not isinstance(declared_payload_sha256, str):
-        raise RegenError(
-            "validate", f"{run_manifest_path} has no input_payload_sha256"
-        )
+        raise RegenError("validate", f"{run_manifest_path} has no input_payload_sha256")
 
     try:
         inspection = inspect_material_label_manifest(manifest_path)
@@ -174,7 +172,8 @@ def regenerate_optical(
     mapping_digest = mapping_config.digest
 
     key = derived_bundle_key(source_payload_sha256, mapping_digest)
-    output_dir = work_root.resolve() / f"{_slug_for(resolved_source)}-{key[:12]}"
+    resolved_work_root = work_root.resolve()
+    output_dir = resolved_work_root / f"{_slug_for(resolved_source)}-{key[:12]}"
     if output_dir == resolved_source or resolved_source in output_dir.parents:
         raise RegenError(
             "validate",
@@ -200,14 +199,19 @@ def regenerate_optical(
         config = PipelineConfig(
             input_kind=InputKind.DIRECT_VOXEL,
             input_path=str(manifest_path),
-            output_path=str(output_dir),
+            # Keep the persisted pipeline config independent of the caller's
+            # absolute work-root location. The output path participates in the
+            # config/provenance digest stamped into optical.zarr, so storing an
+            # absolute path here would make an otherwise identical headless
+            # regeneration fail the session's derived digest verification.
+            output_path=output_dir.name,
             mapping_path=str(mapping_candidate.path),
             mapping_digest=mapping_digest,
             validate_material=True,
             validate_optical=True,
             overwrite=True,
         )
-        run_pipeline(config, base_dir=str(manifest_path.parent))
+        run_pipeline(config, base_dir=str(resolved_work_root))
     except (PipelineConfigError, PipelineRunError) as error:
         raise RegenError("map", str(error)) from error
 
