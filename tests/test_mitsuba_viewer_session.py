@@ -20,11 +20,13 @@ from mitsuba_stage_inputs import resolve_candidate  # noqa: E402
 from mitsuba_stage_presets import stage_config_digest  # noqa: E402
 from mitsuba_viewer_session import (  # noqa: E402
     SessionInputRef,
+    SessionMappingRef,
     SessionPresetRef,
     ViewerSession,
     ViewerSessionError,
     create_viewer_session,
     resolve_viewer_session,
+    verify_derived_optical,
     viewer_session_from_dict,
     viewer_session_from_json,
     viewer_session_to_dict,
@@ -35,8 +37,10 @@ from vdbmat.fixtures import transparent_opaque_interface  # noqa: E402
 from vdbmat.io import write_volume  # noqa: E402
 from vdbmat.optics import (  # noqa: E402
     map_material_volume_to_optical,
+    optical_mapping_to_json_dict,
     phase0_provisional_mapping,
 )
+from vdbmat.pipeline import zarr_store_sha256  # noqa: E402
 
 _DIGEST_A = "sha256:" + "a" * 64
 _DIGEST_B = "sha256:" + "b" * 64
@@ -91,6 +95,47 @@ def _standalone_session(
     )
 
 
+def _bundle_session(
+    *,
+    config: StageConfig | None = None,
+    preset: SessionPresetRef | None = None,
+    mapping: SessionMappingRef | None = None,
+) -> ViewerSession:
+    stage = StageConfig() if config is None else config
+    return ViewerSession(
+        input=SessionInputRef(
+            kind=session_module.InputKind.RUN_BUNDLE,
+            path="catalog/bundle",
+            optical_sha256=_DIGEST_A,
+            run_manifest_sha256=_DIGEST_B,
+        ),
+        stage_config=stage,
+        effective_digest=stage_config_digest(stage),
+        variant="llvm_ad_rgb",
+        seed=20260628,
+        preset=preset,
+        mapping=mapping,
+    )
+
+
+def _bundle_session_with_mapping() -> ViewerSession:
+    return _bundle_session(
+        mapping=SessionMappingRef(
+            path="tinted.optical-mapping.json",
+            digest=_DIGEST_A,
+            derived_optical_sha256=_DIGEST_B,
+        )
+    )
+
+
+def _write_mapping_document(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(optical_mapping_to_json_dict(phase0_provisional_mapping())),
+        encoding="utf-8",
+    )
+
+
 def test_writer_reader_round_trip_preserves_all_fields() -> None:
     config = StageConfig(
         render=RenderSettings(width=320, height=240, spp=16, max_depth=12),
@@ -108,7 +153,7 @@ def test_writer_reader_round_trip_preserves_all_fields() -> None:
 
     assert restored == original
     assert document["format"] == "vdbmat.viewer-session"
-    assert document["format_version"] == "1.0.0"
+    assert document["format_version"] == "1.1.0"
     assert "render" not in document["stage"]["effective"]
     assert document["render"] == {
         "width": 320,
@@ -137,12 +182,31 @@ def test_reader_rejects_unknown_keys(section: str | None, key: str) -> None:
         viewer_session_from_dict(document)
 
 
-@pytest.mark.parametrize("version", ["0.9.0", "1.1.0", "2.0.0"])
+@pytest.mark.parametrize("version", ["0.9.0", "1.2.0", "2.0.0"])
 def test_reader_rejects_unsupported_version(version: str) -> None:
     document = viewer_session_to_dict(_standalone_session())
     document["format_version"] = version
 
     with pytest.raises(ViewerSessionError, match="format_version"):
+        viewer_session_from_dict(document)
+
+
+def test_reader_accepts_legacy_1_0_0_document() -> None:
+    document = viewer_session_to_dict(_standalone_session())
+    document["format_version"] = "1.0.0"
+
+    restored = viewer_session_from_dict(document)
+
+    assert restored.mapping is None
+
+
+def test_reader_rejects_mapping_section_on_1_0_0_document() -> None:
+    document = viewer_session_to_dict(_bundle_session_with_mapping())
+    document["format_version"] = "1.0.0"
+
+    with pytest.raises(
+        ViewerSessionError, match=r"1\.0\.0 must not declare a mapping section"
+    ):
         viewer_session_from_dict(document)
 
 
@@ -484,6 +548,231 @@ def test_resolver_rejects_missing_preset(tmp_path: Path) -> None:
 
     with pytest.raises(ViewerSessionError, match="preset does not exist"):
         resolve_viewer_session(session, input_root, preset_root)
+
+
+# -- mapping (format 1.1) -----------------------------------------------------------
+
+
+def test_mapping_round_trips_and_survives_write_read() -> None:
+    original = _bundle_session_with_mapping()
+
+    document = viewer_session_to_dict(original)
+    restored = viewer_session_from_dict(document)
+
+    assert restored == original
+    assert document["mapping"] == {
+        "path": "tinted.optical-mapping.json",
+        "digest": _DIGEST_A,
+        "derived_optical_sha256": _DIGEST_B,
+    }
+
+
+def test_mapping_requires_run_bundle_input_kind() -> None:
+    with pytest.raises(ValueError, match=r"mapping requires input\.kind"):
+        ViewerSession(
+            input=SessionInputRef(
+                kind=session_module.InputKind.OPTICAL_ZARR,
+                path="catalog/model.zarr",
+                optical_sha256=_DIGEST_A,
+            ),
+            stage_config=StageConfig(),
+            effective_digest=stage_config_digest(StageConfig()),
+            variant="llvm_ad_rgb",
+            seed=1,
+            mapping=SessionMappingRef(
+                path="tinted.optical-mapping.json",
+                digest=_DIGEST_A,
+                derived_optical_sha256=_DIGEST_B,
+            ),
+        )
+
+
+def test_reader_rejects_unknown_mapping_keys() -> None:
+    document = viewer_session_to_dict(_bundle_session_with_mapping())
+    document["mapping"]["unknown"] = True
+
+    with pytest.raises(ViewerSessionError, match=r"mapping.*unknown keys"):
+        viewer_session_from_dict(document)
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["", ".", "/absolute.optical-mapping.json", "../escape.optical-mapping.json"],
+)
+def test_reader_rejects_nonportable_mapping_path(path: str) -> None:
+    document = viewer_session_to_dict(_bundle_session_with_mapping())
+    document["mapping"]["path"] = path
+
+    with pytest.raises(ViewerSessionError, match=r"mapping\.path"):
+        viewer_session_from_dict(document)
+
+
+def test_create_viewer_session_with_mapping(tmp_path: Path) -> None:
+    input_root = tmp_path / "inputs"
+    input_root.mkdir()
+    _write_bundle(input_root / "bundle")
+    candidate = resolve_candidate(input_root, Path("bundle"))
+    mapping_ref = SessionMappingRef(
+        path="tinted.optical-mapping.json",
+        digest=_DIGEST_A,
+        derived_optical_sha256=_DIGEST_B,
+    )
+
+    session = create_viewer_session(
+        candidate, StageConfig(), "llvm_ad_rgb", 1, mapping=mapping_ref
+    )
+
+    assert session.mapping == mapping_ref
+
+
+def test_create_viewer_session_rejects_mapping_with_optical_zarr_candidate(
+    tmp_path: Path,
+) -> None:
+    input_root = tmp_path / "inputs"
+    input_root.mkdir()
+    _write_optical(input_root / "model.zarr")
+    candidate = resolve_candidate(input_root, Path("model.zarr"))
+
+    with pytest.raises(ViewerSessionError, match=r"mapping requires input\.kind"):
+        create_viewer_session(
+            candidate,
+            StageConfig(),
+            "llvm_ad_rgb",
+            1,
+            mapping=SessionMappingRef(
+                path="tinted.optical-mapping.json",
+                digest=_DIGEST_A,
+                derived_optical_sha256=_DIGEST_B,
+            ),
+        )
+
+
+def test_resolve_and_verify_derived_optical_round_trip(tmp_path: Path) -> None:
+    input_root = tmp_path / "inputs"
+    mapping_root = tmp_path / "mappings"
+    input_root.mkdir()
+    _write_bundle(input_root / "bundle")
+    candidate = resolve_candidate(input_root, Path("bundle"))
+
+    mapping_path = mapping_root / "tinted.optical-mapping.json"
+    _write_mapping_document(mapping_path)
+    mapping_digest = phase0_provisional_mapping().digest
+
+    derived_path = tmp_path / "derived" / "optical.zarr"
+    _write_optical(derived_path)
+    derived_digest = zarr_store_sha256(derived_path)
+
+    session = create_viewer_session(
+        candidate,
+        StageConfig(),
+        "llvm_ad_rgb",
+        1,
+        mapping=SessionMappingRef(
+            path="tinted.optical-mapping.json",
+            digest=mapping_digest,
+            derived_optical_sha256=derived_digest,
+        ),
+    )
+
+    resolved = resolve_viewer_session(session, input_root, mapping_root=mapping_root)
+
+    assert resolved.mapping_candidate is not None
+    assert resolved.mapping_candidate.root_relative == "tinted.optical-mapping.json"
+    verify_derived_optical(resolved, derived_path)
+
+
+def test_verify_derived_optical_rejects_mismatched_bytes(tmp_path: Path) -> None:
+    input_root = tmp_path / "inputs"
+    mapping_root = tmp_path / "mappings"
+    input_root.mkdir()
+    _write_bundle(input_root / "bundle")
+    candidate = resolve_candidate(input_root, Path("bundle"))
+
+    mapping_path = mapping_root / "tinted.optical-mapping.json"
+    _write_mapping_document(mapping_path)
+    mapping_digest = phase0_provisional_mapping().digest
+
+    derived_path = tmp_path / "derived" / "optical.zarr"
+    _write_optical(derived_path)
+    derived_digest = zarr_store_sha256(derived_path)
+
+    session = create_viewer_session(
+        candidate,
+        StageConfig(),
+        "llvm_ad_rgb",
+        1,
+        mapping=SessionMappingRef(
+            path="tinted.optical-mapping.json",
+            digest=mapping_digest,
+            derived_optical_sha256=derived_digest,
+        ),
+    )
+    resolved = resolve_viewer_session(session, input_root, mapping_root=mapping_root)
+    (derived_path / "changed-marker").write_text("changed")
+
+    with pytest.raises(ViewerSessionError, match="derived optical digest mismatch"):
+        verify_derived_optical(resolved, derived_path)
+
+
+def test_verify_derived_optical_requires_mapping_reference(tmp_path: Path) -> None:
+    input_root = tmp_path / "inputs"
+    input_root.mkdir()
+    _write_optical(input_root / "model.zarr")
+    candidate = resolve_candidate(input_root, Path("model.zarr"))
+    session = create_viewer_session(candidate, StageConfig(), "llvm_ad_rgb", 1)
+    resolved = resolve_viewer_session(session, input_root)
+
+    with pytest.raises(ViewerSessionError, match="no mapping reference to verify"):
+        verify_derived_optical(resolved, input_root / "model.zarr")
+
+
+def test_resolver_requires_mapping_root_for_reference(tmp_path: Path) -> None:
+    input_root = tmp_path / "inputs"
+    input_root.mkdir()
+    _write_bundle(input_root / "bundle")
+    candidate = resolve_candidate(input_root, Path("bundle"))
+    session = create_viewer_session(
+        candidate,
+        StageConfig(),
+        "llvm_ad_rgb",
+        1,
+        mapping=SessionMappingRef(
+            path="tinted.optical-mapping.json",
+            digest=_DIGEST_A,
+            derived_optical_sha256=_DIGEST_B,
+        ),
+    )
+
+    with pytest.raises(ViewerSessionError, match="requires --mapping-root"):
+        resolve_viewer_session(session, input_root)
+
+
+def test_resolver_rejects_modified_mapping_file(tmp_path: Path) -> None:
+    input_root = tmp_path / "inputs"
+    mapping_root = tmp_path / "mappings"
+    input_root.mkdir()
+    _write_bundle(input_root / "bundle")
+    candidate = resolve_candidate(input_root, Path("bundle"))
+    mapping_path = mapping_root / "tinted.optical-mapping.json"
+    _write_mapping_document(mapping_path)
+    mapping_digest = phase0_provisional_mapping().digest
+    session = create_viewer_session(
+        candidate,
+        StageConfig(),
+        "llvm_ad_rgb",
+        1,
+        mapping=SessionMappingRef(
+            path="tinted.optical-mapping.json",
+            digest=mapping_digest,
+            derived_optical_sha256=_DIGEST_B,
+        ),
+    )
+    document = json.loads(mapping_path.read_text())
+    document["materials"][0]["sigma_a_rgb_per_m"] = [9.0, 9.0, 9.0]
+    mapping_path.write_text(json.dumps(document), encoding="utf-8")
+
+    with pytest.raises(ViewerSessionError, match="mapping digest mismatch"):
+        resolve_viewer_session(session, input_root, mapping_root=mapping_root)
 
 
 def test_atomic_writer_round_trips_and_creates_parent(tmp_path: Path) -> None:

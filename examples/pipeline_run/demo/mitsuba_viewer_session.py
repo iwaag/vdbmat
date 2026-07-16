@@ -35,6 +35,12 @@ from mitsuba_stage_inputs import (
     InputKind,
     resolve_candidate,
 )
+from mitsuba_stage_mappings import (
+    MappingCandidate,
+    MappingCatalogError,
+    load_mapping,
+    resolve_mapping_candidate,
+)
 from mitsuba_stage_presets import (
     PresetCandidate,
     PresetCatalogError,
@@ -46,7 +52,12 @@ from mitsuba_stage_presets import (
 from vdbmat.pipeline import sha256_file, zarr_store_sha256
 
 VIEWER_SESSION_FORMAT = "vdbmat.viewer-session"
-VIEWER_SESSION_FORMAT_VERSION = "1.0.0"
+VIEWER_SESSION_FORMAT_VERSION = "1.1.0"
+
+_FORMAT_VERSION_1_0 = "1.0.0"
+_SUPPORTED_FORMAT_VERSIONS = frozenset(
+    {_FORMAT_VERSION_1_0, VIEWER_SESSION_FORMAT_VERSION}
+)
 
 _RUN_MANIFEST_NAME = "run.json"
 _DIGEST_PATTERN = re.compile(r"sha256:[0-9a-f]{64}\Z")
@@ -54,6 +65,7 @@ _VARIANTS = frozenset({"llvm_ad_rgb", "cuda_ad_rgb"})
 _TOP_LEVEL_KEYS = frozenset(
     {"format", "format_version", "input", "stage", "render", "mitsuba"}
 )
+_ALL_TOP_LEVEL_KEYS = _TOP_LEVEL_KEYS | {"mapping"}
 _EFFECTIVE_STAGE_KEYS = frozenset(
     {
         "format",
@@ -155,6 +167,29 @@ class SessionPresetRef:
 
 
 @dataclass(frozen=True, slots=True)
+class SessionMappingRef:
+    """Reference to an applied optical mapping and its derived optical output.
+
+    Present only when the session's input was rendered through a material
+    re-mapping rather than as-is. ``path``/``digest`` pin the mapping document
+    itself; ``derived_optical_sha256`` pins the exact derived ``optical.zarr``
+    bytes produced by applying it to the session's input, so a session replay
+    detects both a moved/edited mapping and a non-reproducing regeneration.
+    """
+
+    path: str
+    digest: str
+    derived_optical_sha256: str
+
+    def __post_init__(self) -> None:
+        _portable_path(self.path, field="mapping.path")
+        _digest(self.digest, field="mapping.digest")
+        _digest(
+            self.derived_optical_sha256, field="mapping.derived_optical_sha256"
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class ViewerSession:
     """Fully validated in-memory representation of a session manifest."""
 
@@ -164,6 +199,7 @@ class ViewerSession:
     variant: str
     seed: int
     preset: SessionPresetRef | None = None
+    mapping: SessionMappingRef | None = None
 
     def __post_init__(self) -> None:
         _digest(self.effective_digest, field="stage.effective_digest")
@@ -181,6 +217,11 @@ class ViewerSession:
             raise TypeError("mitsuba.seed must be an integer")
         if self.seed < 0:
             raise ValueError("mitsuba.seed must be >= 0")
+        if self.mapping is not None and self.input.kind is not InputKind.RUN_BUNDLE:
+            raise ValueError(
+                "mapping requires input.kind to be run-bundle "
+                "(an optical-zarr input carries no material to re-map)"
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -194,6 +235,7 @@ class ResolvedViewerSession:
     variant: str
     seed: int
     preset_candidate: PresetCandidate | None
+    mapping_candidate: MappingCandidate | None = None
 
 
 def create_viewer_session(
@@ -203,8 +245,14 @@ def create_viewer_session(
     seed: int,
     *,
     preset: SessionPresetRef | None = None,
+    mapping: SessionMappingRef | None = None,
 ) -> ViewerSession:
-    """Capture one verified catalog candidate as a digest-pinned session."""
+    """Capture one verified catalog candidate as a digest-pinned session.
+
+    ``mapping``, when given, must already carry the *derived* bundle's
+    optical digest (computed by the caller after regeneration) — this
+    function only pins the source candidate, never runs the pipeline.
+    """
     try:
         optical_digest = zarr_store_sha256(candidate.optical_zarr)
         run_digest = (
@@ -225,25 +273,37 @@ def create_viewer_session(
             variant=variant,
             seed=seed,
             preset=preset,
+            mapping=mapping,
         )
     except (OSError, TypeError, ValueError) as error:
         raise ViewerSessionError("capture", str(error)) from error
 
 
 def viewer_session_from_dict(document: object) -> ViewerSession:
-    """Strictly parse and validate a viewer-session JSON document."""
+    """Strictly parse and validate a viewer-session JSON document.
+
+    Accepts both ``format_version`` ``1.0.0`` and ``1.1.0``; a ``1.0.0``
+    document must not declare a ``mapping`` section, since that section did
+    not exist in that version.
+    """
     try:
         root = _object(document, field="session")
-        _exact_keys(root, _TOP_LEVEL_KEYS, field="session")
+        _required_and_allowed_keys(
+            root, required=_TOP_LEVEL_KEYS, allowed=_ALL_TOP_LEVEL_KEYS, field="session"
+        )
         if root["format"] != VIEWER_SESSION_FORMAT:
             raise ValueError(
                 f"format must be {VIEWER_SESSION_FORMAT!r}, got {root['format']!r}"
             )
-        if root["format_version"] != VIEWER_SESSION_FORMAT_VERSION:
+        format_version = root["format_version"]
+        if format_version not in _SUPPORTED_FORMAT_VERSIONS:
             raise ValueError(
-                "format_version must be "
-                f"{VIEWER_SESSION_FORMAT_VERSION!r}, "
-                f"got {root['format_version']!r}"
+                "format_version must be one of "
+                f"{sorted(_SUPPORTED_FORMAT_VERSIONS)!r}, got {format_version!r}"
+            )
+        if format_version == _FORMAT_VERSION_1_0 and "mapping" in root:
+            raise ValueError(
+                "format_version 1.0.0 must not declare a mapping section"
             )
 
         input_ref = _parse_input(root["input"])
@@ -251,6 +311,7 @@ def viewer_session_from_dict(document: object) -> ViewerSession:
             root["stage"], root["render"]
         )
         variant, seed = _parse_mitsuba(root["mitsuba"])
+        mapping = _parse_mapping(root["mapping"]) if "mapping" in root else None
         return ViewerSession(
             input=input_ref,
             stage_config=stage_config,
@@ -258,6 +319,7 @@ def viewer_session_from_dict(document: object) -> ViewerSession:
             variant=variant,
             seed=seed,
             preset=preset,
+            mapping=mapping,
         )
     except ViewerSessionError:
         raise
@@ -298,7 +360,7 @@ def viewer_session_to_dict(session: ViewerSession) -> dict[str, Any]:
             "path": session.preset.path,
             "digest": session.preset.digest,
         }
-    return {
+    document: dict[str, Any] = {
         "format": VIEWER_SESSION_FORMAT,
         "format_version": VIEWER_SESSION_FORMAT_VERSION,
         "input": input_document,
@@ -306,6 +368,13 @@ def viewer_session_to_dict(session: ViewerSession) -> dict[str, Any]:
         "render": render,
         "mitsuba": {"variant": session.variant, "seed": session.seed},
     }
+    if session.mapping is not None:
+        document["mapping"] = {
+            "path": session.mapping.path,
+            "digest": session.mapping.digest,
+            "derived_optical_sha256": session.mapping.derived_optical_sha256,
+        }
+    return document
 
 
 def write_viewer_session(path: Path, session: ViewerSession) -> None:
@@ -333,10 +402,19 @@ def resolve_viewer_session(
     session: ViewerSession,
     input_root: Path,
     preset_root: Path | None = None,
+    mapping_root: Path | None = None,
     *,
     on_stage: Callable[[str], None] = lambda _stage: None,
 ) -> ResolvedViewerSession:
-    """Resolve root-relative references and verify every declared digest."""
+    """Resolve root-relative references and verify every declared digest.
+
+    This function is pure and side-effect-free: it never runs the pipeline.
+    A session with a ``mapping`` reference resolves and digest-checks the
+    mapping *document* here, but the caller is responsible for actually
+    regenerating the derived optical volume (e.g. via
+    :func:`~mitsuba_stage_regen.regenerate_optical`) and then checking the
+    result against the session with :func:`verify_derived_optical`.
+    """
     on_stage("resolve")
     try:
         candidate = resolve_candidate(input_root, Path(session.input.path))
@@ -377,6 +455,7 @@ def resolve_viewer_session(
         )
 
     preset_candidate = _resolve_session_preset(session.preset, preset_root)
+    mapping_candidate = _resolve_session_mapping(session.mapping, mapping_root)
     return ResolvedViewerSession(
         session=session,
         input_candidate=candidate,
@@ -385,6 +464,36 @@ def resolve_viewer_session(
         variant=session.variant,
         seed=session.seed,
         preset_candidate=preset_candidate,
+        mapping_candidate=mapping_candidate,
+    )
+
+
+def verify_derived_optical(
+    resolved: ResolvedViewerSession, derived_optical_zarr: Path
+) -> None:
+    """Verify a freshly (re)generated derived optical store matches its pin.
+
+    Call this only after actually producing ``derived_optical_zarr`` — e.g.
+    via :func:`~mitsuba_stage_regen.regenerate_optical` — for a session whose
+    :attr:`ResolvedViewerSession.session` carries a ``mapping`` reference.
+    Kept separate from :func:`resolve_viewer_session` so that resolution
+    itself never runs the pipeline; running it is the caller's explicit,
+    staged responsibility.
+    """
+    if resolved.session.mapping is None:
+        raise ViewerSessionError(
+            "verify", "session has no mapping reference to verify against"
+        )
+    try:
+        actual = zarr_store_sha256(derived_optical_zarr)
+    except OSError as error:
+        raise ViewerSessionError(
+            "verify", f"cannot digest derived optical store: {error}"
+        ) from error
+    _verify_digest(
+        "derived optical",
+        expected=resolved.session.mapping.derived_optical_sha256,
+        actual=actual,
     )
 
 
@@ -477,6 +586,23 @@ def _parse_preset(value: object) -> SessionPresetRef:
     )
 
 
+def _parse_mapping(value: object) -> SessionMappingRef:
+    document = _object(value, field="mapping")
+    _exact_keys(
+        document,
+        frozenset({"path", "digest", "derived_optical_sha256"}),
+        field="mapping",
+    )
+    return SessionMappingRef(
+        path=_string(document["path"], field="mapping.path"),
+        digest=_string(document["digest"], field="mapping.digest"),
+        derived_optical_sha256=_string(
+            document["derived_optical_sha256"],
+            field="mapping.derived_optical_sha256",
+        ),
+    )
+
+
 def _parse_mitsuba(value: object) -> tuple[str, int]:
     document = _object(value, field="mitsuba")
     _exact_keys(document, frozenset({"variant", "seed"}), field="mitsuba")
@@ -505,6 +631,28 @@ def _resolve_session_preset(
         "stage preset",
         expected=reference.digest,
         actual=stage_config_digest(preset_config),
+    )
+    return candidate
+
+
+def _resolve_session_mapping(
+    reference: SessionMappingRef | None, mapping_root: Path | None
+) -> MappingCandidate | None:
+    if reference is None:
+        return None
+    if mapping_root is None:
+        raise ViewerSessionError(
+            "resolve", "mapping reference requires --mapping-root"
+        )
+    try:
+        candidate = resolve_mapping_candidate(mapping_root, Path(reference.path))
+        mapping_config = load_mapping(candidate)
+    except (MappingCatalogError, OSError) as error:
+        raise ViewerSessionError("resolve", f"mapping: {error}") from error
+    _verify_digest(
+        "mapping",
+        expected=reference.digest,
+        actual=mapping_config.digest,
     )
     return candidate
 
@@ -582,11 +730,13 @@ __all__ = [
     "VIEWER_SESSION_FORMAT_VERSION",
     "ResolvedViewerSession",
     "SessionInputRef",
+    "SessionMappingRef",
     "SessionPresetRef",
     "ViewerSession",
     "ViewerSessionError",
     "create_viewer_session",
     "resolve_viewer_session",
+    "verify_derived_optical",
     "viewer_session_from_dict",
     "viewer_session_from_json",
     "viewer_session_to_dict",
