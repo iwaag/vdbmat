@@ -24,7 +24,11 @@ from mitsuba_stage import (  # noqa: E402
     StageConfig,
     apply_stage,
 )
-from mitsuba_stage_viewer import StageCore, TraversedPreviewScene  # noqa: E402
+from mitsuba_stage_viewer import (  # noqa: E402
+    StageCore,
+    TraversedPreviewScene,
+    _session_work_dir,
+)
 
 mi = pytest.importorskip("mitsuba")
 
@@ -156,8 +160,9 @@ def test_stage_core_final_reprepare_uses_max_depth(tmp_path: Path) -> None:
 
     _pixels, preview_stats, route = core.render_preview(changed)
     stats = core.render_final(changed, tmp_path / "final.png")
+    session_dir = _session_work_dir(tmp_path / "work", 0, optical_zarr)
     summary = json.loads(
-        (tmp_path / "work/final_scene/scene-summary.json").read_text(
+        (session_dir / "final_scene" / "scene-summary.json").read_text(
             encoding="utf-8"
         )
     )
@@ -166,6 +171,44 @@ def test_stage_core_final_reprepare_uses_max_depth(tmp_path: Path) -> None:
     assert "max_depth=14" in preview_stats
     assert summary["render"]["max_depth"] == 14
     assert "max_depth=14" in stats
+
+
+def test_swap_session_uses_fresh_work_dir_and_advances_generation(
+    tmp_path: Path,
+) -> None:
+    volume = map_material_volume_to_optical(
+        homogeneous_transparent().volume, phase0_provisional_mapping()
+    )
+    optical_zarr = tmp_path / "optical.zarr"
+    write_volume(optical_zarr, volume)
+    initial = StageConfig(render=RenderSettings(width=8, height=8, spp=1))
+    core = StageCore(
+        optical_zarr,
+        tmp_path / "work",
+        preview_size=8,
+        preview_spp=1,
+        initial=initial,
+    )
+    first_session_dir = core._session.work_dir
+    assert core.session_generation == 0
+    assert first_session_dir == _session_work_dir(tmp_path / "work", 0, optical_zarr)
+
+    second_session = core._build_session(optical_zarr, initial)
+    core.swap_session(second_session)
+
+    assert core.session_generation == 1
+    assert core._session is second_session
+    assert second_session.work_dir == _session_work_dir(
+        tmp_path / "work", 1, optical_zarr
+    )
+    assert second_session.work_dir != first_session_dir
+    # Reloading the same input never reuses or overwrites the old artefacts.
+    assert (first_session_dir / "preview_scene").exists()
+    assert (second_session.work_dir / "preview_scene").exists()
+
+    # The swapped-in session renders through the normal StageCore API.
+    pixels, _stats, _route = core.render_preview(initial)
+    assert pixels.shape == (8, 8, 3)
 
 
 @pytest.mark.parametrize("max_depth", [8, 16])

@@ -50,14 +50,16 @@ side-effect files and the default preset/PNG outputs; point it at
 from __future__ import annotations
 
 import argparse
+import itertools
 import math
+import re
 import sys
 import tempfile
 import threading
 import time
 import traceback
 from collections.abc import Callable
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 from types import ModuleType
 
@@ -182,6 +184,35 @@ def _preview_stage_config(
 
 def _final_render_key(render: RenderSettings) -> FinalRenderKey:
     return render.width, render.height, render.max_depth
+
+
+_INPUTS_DIRNAME = "inputs"
+_OPTICAL_ASSET_NAME = "optical.zarr"
+_SLUG_PATTERN = re.compile(r"[^a-zA-Z0-9]+")
+
+
+def _slug_for(optical_zarr: Path) -> str:
+    """A short, filesystem-safe identifier derived from an input path."""
+    base = (
+        optical_zarr.parent.name
+        if optical_zarr.name == _OPTICAL_ASSET_NAME
+        else optical_zarr.stem
+    )
+    slug = _SLUG_PATTERN.sub("-", base).strip("-").lower()
+    return slug or "input"
+
+
+def _session_work_dir(work_dir: Path, seq: int, optical_zarr: Path) -> Path:
+    """Return the per-input work directory for one session.
+
+    Every session, including the initial one, gets a freshly numbered
+    directory under ``work_dir/inputs/``, so PLY/scene-summary artefacts from
+    different inputs (or repeated loads of the same input) never collide.
+    ``work_dir``'s internal layout is a scratch side effect, not an external
+    contract, so this scheme is free to differ from Phase 1's fixed
+    ``preview_scene`` / ``final_scene`` paths.
+    """
+    return work_dir / _INPUTS_DIRNAME / f"{seq:03d}-{_slug_for(optical_zarr)}"
 
 
 def _nested(mapping: dict[str, object], path: str) -> object:
@@ -325,11 +356,39 @@ class TraversedPreviewScene:
         return self.mi.render(self.scene, seed=self.seed, spp=spp), route
 
 
+@dataclass
+class InputSession:
+    """Everything bound to one loaded optical volume: the swap unit.
+
+    Building one is the expensive, input-dependent part of ``StageCore``
+    (boundary-mesh extraction, PLY writing, preview scene load). Nothing
+    outside :class:`StageCore` holds a reference across a swap, so replacing
+    this object is exactly what "switch input" means.
+    """
+
+    optical_zarr: Path
+    work_dir: Path
+    volume: OpticalPropertyVolume
+    seed: int
+    preview_scene: TraversedPreviewScene
+    base_final: object | None = None
+    final_key: FinalRenderKey | None = None
+
+
 class StageCore:
     """Viser-free rendering core: prepare twice, then cheap re-renders.
 
     Kept independent of the GUI so the render/save/reproduce paths can be
     exercised by scripts (verification) as well as by the viser bindings.
+
+    Process-wide state (the Mitsuba module/variant, preview size/spp) lives
+    directly on ``StageCore``; everything bound to one input lives on the
+    current :class:`InputSession`, reachable through ``self._session``.
+    ``session_generation`` increments on every :meth:`swap_session` so a
+    render worker can detect and drop a result computed against a session
+    that is no longer current — a defense-in-depth guard on top of the
+    primary protection, which is that the render worker itself only ever
+    runs one job (including a swap) at a time.
     """
 
     def __init__(
@@ -341,41 +400,57 @@ class StageCore:
         initial: StageConfig,
         variant: str = "llvm_ad_rgb",
     ) -> None:
-        volume = read_volume(optical_zarr)
-        if not isinstance(volume, OpticalPropertyVolume):
-            raise SystemExit(f"{optical_zarr} is not an optical property volume")
-        self.volume = volume
         self.work_dir = work_dir
         self.preview_size = preview_size
         self.preview_spp = preview_spp
-        self._seed = MitsubaExportConfig().seed
         self.mi = _load_mitsuba(variant)
+        self.session_generation = 0
+        self._session_seq = itertools.count()
+        self._session = self._build_session(optical_zarr, initial)
+
+    def _build_session(self, optical_zarr: Path, initial: StageConfig) -> InputSession:
+        volume = read_volume(optical_zarr)
+        if not isinstance(volume, OpticalPropertyVolume):
+            raise SystemExit(f"{optical_zarr} is not an optical property volume")
+        session_dir = _session_work_dir(
+            self.work_dir, next(self._session_seq), optical_zarr
+        )
+        seed = MitsubaExportConfig().seed
 
         preview_config = MitsubaExportConfig(
-            width=preview_size,
-            height=preview_size,
-            spp=preview_spp,
+            width=self.preview_size,
+            height=self.preview_size,
+            spp=self.preview_spp,
             max_depth=initial.render.max_depth,
-            variant=variant,
+            variant=self.mi.variant(),
         )
-        self._base_preview = prepare_mitsuba_scene(
-            volume, work_dir / "preview_scene", config=preview_config
+        base_preview = prepare_mitsuba_scene(
+            volume, session_dir / "preview_scene", config=preview_config
         )
-        preview_initial = _preview_stage_config(initial, preview_size, preview_spp)
-        self._preview_scene = TraversedPreviewScene(
-            self.mi,
-            self._base_preview,
-            self.volume.geometry,
-            preview_initial,
-            self._seed,
+        preview_initial = _preview_stage_config(
+            initial, self.preview_size, self.preview_spp
         )
-        self._base_final = None
-        self._final_key: FinalRenderKey | None = None
-        self._ensure_final(initial.render)
+        preview_scene = TraversedPreviewScene(
+            self.mi, base_preview, volume.geometry, preview_initial, seed
+        )
+        session = InputSession(
+            optical_zarr=optical_zarr,
+            work_dir=session_dir,
+            volume=volume,
+            seed=seed,
+            preview_scene=preview_scene,
+        )
+        self._ensure_final(session, initial.render)
+        return session
 
-    def _ensure_final(self, render: RenderSettings) -> None:
+    def swap_session(self, session: InputSession) -> None:
+        """Replace the current session and advance the session generation."""
+        self._session = session
+        self.session_generation += 1
+
+    def _ensure_final(self, session: InputSession, render: RenderSettings) -> None:
         final_key = _final_render_key(render)
-        if self._final_key == final_key:
+        if session.final_key == final_key:
             return
         config = MitsubaExportConfig(
             width=render.width,
@@ -384,16 +459,23 @@ class StageCore:
             max_depth=render.max_depth,
             variant=self.mi.variant(),
         )
-        self._base_final = prepare_mitsuba_scene(
-            self.volume, self.work_dir / "final_scene", config=config
+        session.base_final = prepare_mitsuba_scene(
+            session.volume, session.work_dir / "final_scene", config=config
         )
-        self._final_key = final_key
+        session.final_key = final_key
 
-    def _render(self, base, config: StageConfig, spp: int) -> np.ndarray:
+    def _render(
+        self,
+        base,
+        volume: OpticalPropertyVolume,
+        config: StageConfig,
+        spp: int,
+        seed: int,
+    ) -> np.ndarray:
         scene_dict = dict(base.scene_dict)
-        apply_stage(self.mi, scene_dict, self.volume.geometry, config)
+        apply_stage(self.mi, scene_dict, volume.geometry, config)
         scene = self.mi.load_dict(scene_dict)
-        return self.mi.render(scene, seed=self._seed, spp=spp)
+        return self.mi.render(scene, seed=seed, spp=spp)
 
     def render_preview(
         self, config: StageConfig, spp: int | None = None
@@ -402,7 +484,7 @@ class StageCore:
         preview_config = _preview_stage_config(
             config, self.preview_size, self.preview_spp
         )
-        image, route = self._preview_scene.render(
+        image, route = self._session.preview_scene.render(
             preview_config, self.preview_spp if spp is None else spp
         )
         stats = _pixel_stats(
@@ -412,9 +494,18 @@ class StageCore:
         return np.asarray(bitmap), stats, route
 
     def render_final(self, config: StageConfig, output_png: Path) -> str:
-        """Render at the config's full resolution/spp and write the PNG."""
-        self._ensure_final(config.render)
-        image = self._render(self._base_final, config, config.render.spp)
+        """Render at the config's full resolution/spp and write the PNG.
+
+        Reads ``self._session`` once, at call time, so a job already queued
+        on the render worker always renders whichever session is current
+        when it actually runs (not whichever was current when it was
+        submitted).
+        """
+        session = self._session
+        self._ensure_final(session, config.render)
+        image = self._render(
+            session.base_final, session.volume, config, config.render.spp, session.seed
+        )
         output_png.parent.mkdir(parents=True, exist_ok=True)
         self.mi.util.write_bitmap(str(output_png), image, write_async=False)
         return _pixel_stats(
@@ -432,15 +523,31 @@ class StageCore:
 
 
 class RenderWorker(threading.Thread):
-    """Single worker: immediate coarse preview, then latest settled preview."""
+    """Single worker: immediate coarse preview, then latest settled preview.
+
+    Preview staleness is guarded on two independent axes. ``_generation`` is
+    this worker's own monotonic per-request counter (latest-wins: a newer
+    request always supersedes a pending older one). ``session_generation`` is
+    supplied by the caller (``StageCore.session_generation``) and identifies
+    which input the requested config belongs to; a result is only published
+    if the session that was current when the request was made is still
+    current when the render finishes. Because this worker only ever runs one
+    job (a preview render or a submitted job, e.g. an input swap) at a time,
+    the session check can in practice never fail today — swapping and
+    rendering never interleave. It exists as a defense-in-depth guard for
+    re-entrancy or a future multi-worker design, and is exercised directly
+    in tests since the single-thread serialization makes it otherwise
+    unreachable.
+    """
 
     def __init__(self, settle_delay: float = 0.35) -> None:
         super().__init__(daemon=True)
         self._condition = threading.Condition()
-        self._pending_preview: tuple[int, StageConfig] | None = None
+        self._pending_preview: tuple[int, int, StageConfig] | None = None
         self._generation = 0
         self._preview_fn: Callable[[StageConfig, str], object] | None = None
         self._publish_fn: Callable[[object, str], None] | None = None
+        self._current_session_generation: Callable[[], int] = lambda: 0
         self._jobs: list[Callable[[], None]] = []
         self._settle_delay = settle_delay
         self._on_error: Callable[[str], None] = lambda message: print(
@@ -452,15 +559,17 @@ class RenderWorker(threading.Thread):
         preview_fn: Callable[[StageConfig, str], object],
         publish_fn: Callable[[object, str], None],
         on_error: Callable[[str], None],
+        current_session_generation: Callable[[], int] = lambda: 0,
     ) -> None:
         self._preview_fn = preview_fn
         self._publish_fn = publish_fn
         self._on_error = on_error
+        self._current_session_generation = current_session_generation
 
-    def request_preview(self, config: StageConfig) -> int:
+    def request_preview(self, config: StageConfig, session_generation: int = 0) -> int:
         with self._condition:
             self._generation += 1
-            self._pending_preview = (self._generation, config)
+            self._pending_preview = (self._generation, session_generation, config)
             self._condition.notify()
             return self._generation
 
@@ -469,10 +578,16 @@ class RenderWorker(threading.Thread):
             self._jobs.append(job)
             self._condition.notify()
 
-    def _publish(self, result: object, quality: str, generation: int) -> None:
+    def _publish(
+        self, result: object, quality: str, generation: int, session_generation: int
+    ) -> None:
         with self._condition:
             current = self._generation
-        if generation == current and self._publish_fn is not None:
+        if (
+            generation == current
+            and session_generation == self._current_session_generation()
+            and self._publish_fn is not None
+        ):
             self._publish_fn(result, quality)
 
     def run(self) -> None:
@@ -494,9 +609,9 @@ class RenderWorker(threading.Thread):
                     continue
                 if preview is None or self._preview_fn is None:
                     continue
-                generation, config = preview
+                generation, session_generation, config = preview
                 result = self._preview_fn(config, "interactive")
-                self._publish(result, "interactive", generation)
+                self._publish(result, "interactive", generation, session_generation)
                 deadline = time.monotonic() + self._settle_delay
                 with self._condition:
                     while (
@@ -515,7 +630,7 @@ class RenderWorker(threading.Thread):
                     )
                 if settled:
                     result = self._preview_fn(config, "settled")
-                    self._publish(result, "settled", generation)
+                    self._publish(result, "settled", generation, session_generation)
             except Exception:
                 self._on_error(traceback.format_exc(limit=3))
 
@@ -949,16 +1064,24 @@ class ViewerApp:
         render_button.on_click(lambda _event: self._queue_final())
 
         self.worker.configure(
-            self._render_preview, self._publish_preview, self._show_error
+            self._render_preview,
+            self._publish_preview,
+            self._show_error,
+            self._current_session_generation,
         )
         self.worker.start()
         self._schedule_preview()
 
     # -- worker-side operations -------------------------------------------
 
+    def _current_session_generation(self) -> int:
+        return self.core.session_generation
+
     def _schedule_preview(self) -> None:
         self.status.content = "rendering preview…"
-        self.worker.request_preview(self.binder.current())
+        self.worker.request_preview(
+            self.binder.current(), self.core.session_generation
+        )
 
     def _render_preview(
         self, config: StageConfig, quality: str

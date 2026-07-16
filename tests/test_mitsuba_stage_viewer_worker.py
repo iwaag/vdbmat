@@ -24,6 +24,8 @@ from mitsuba_stage_viewer import (  # noqa: E402
     _fit_preview_to_aspect,
     _parse_args,
     _preview_stage_config,
+    _session_work_dir,
+    _slug_for,
     _structure_key,
 )
 
@@ -261,3 +263,83 @@ def test_stage_binder_max_depth_widget_and_preset_round_trip(
     StageCore.save_preset(current, preset_path)
 
     assert stage_config_from_json(preset_path) == current
+
+
+def test_render_worker_discards_preview_from_stale_session_generation() -> None:
+    """A result computed against a superseded session is never published.
+
+    This scenario cannot actually arise today (the worker only ever runs one
+    job at a time, so a swap can never interleave with an in-flight render),
+    but the guard exists for defense in depth. The fake ``render`` callback
+    below stands in for "the swap happened while this render was running".
+    """
+    published: list[tuple[str, str]] = []
+    current_generation = {"value": 1}
+
+    def render(_config: StageConfig, quality: str) -> str:
+        current_generation["value"] = 2
+        return quality
+
+    worker = RenderWorker(settle_delay=0.01)
+    worker.configure(
+        render,
+        lambda result, quality: published.append((str(result), quality)),
+        pytest_fail,
+        lambda: current_generation["value"],
+    )
+    worker.start()
+    worker.request_preview(StageConfig(), session_generation=1)
+
+    time.sleep(0.2)
+    assert published == []
+
+
+def test_render_worker_publishes_when_session_generation_matches() -> None:
+    published: list[tuple[str, str]] = []
+
+    worker = RenderWorker(settle_delay=0.01)
+    worker.configure(
+        lambda _config, quality: quality,
+        lambda result, quality: published.append((str(result), quality)),
+        pytest_fail,
+        lambda: 7,
+    )
+    worker.start()
+    worker.request_preview(StageConfig(), session_generation=7)
+
+    _wait_until(lambda: ("settled", "settled") in published)
+    assert ("interactive", "interactive") in published
+
+
+def test_render_worker_defaults_preserve_prior_behaviour_without_sessions() -> None:
+    """configure()/request_preview() with no session args behave as before."""
+    published: list[tuple[str, str]] = []
+
+    worker = RenderWorker(settle_delay=0.01)
+    worker.configure(
+        lambda _config, quality: quality,
+        lambda result, quality: published.append((str(result), quality)),
+        pytest_fail,
+    )
+    worker.start()
+    worker.request_preview(StageConfig())
+
+    _wait_until(lambda: ("settled", "settled") in published)
+
+
+def test_slug_for_distinguishes_bundle_and_standalone_optical_paths() -> None:
+    assert _slug_for(Path("/root/bundle_a/optical.zarr")) == "bundle-a"
+    assert _slug_for(Path("/root/standalone.zarr")) == "standalone"
+
+
+def test_session_work_dir_sequence_is_unique_for_repeated_input(
+    tmp_path: Path,
+) -> None:
+    optical_zarr = Path("bundle_a/optical.zarr")
+
+    first = _session_work_dir(tmp_path, 0, optical_zarr)
+    second = _session_work_dir(tmp_path, 1, optical_zarr)
+
+    assert first == tmp_path / "inputs" / "000-bundle-a"
+    assert second == tmp_path / "inputs" / "001-bundle-a"
+    assert first != second
