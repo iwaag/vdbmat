@@ -88,11 +88,22 @@ from mitsuba_stage import (
     stage_config_to_dict,
 )
 from mitsuba_stage_inputs import (
+    InputCandidate,
     InputCatalogError,
+    InputKind,
     describe_candidate,
     resolve_candidate,
     resolve_input_root,
     scan_input_catalog,
+)
+from mitsuba_stage_mappings import (
+    MappingCandidate,
+    MappingCatalogError,
+    describe_mapping,
+    load_mapping,
+    resolve_mapping_candidate,
+    resolve_mapping_root,
+    scan_mapping_catalog,
 )
 from mitsuba_stage_presets import (
     PresetCatalogError,
@@ -103,11 +114,14 @@ from mitsuba_stage_presets import (
     scan_preset_catalog,
     stage_config_digest,
 )
+from mitsuba_stage_regen import RegenError, regenerate_optical
 from mitsuba_viewer_session import (
+    SessionMappingRef,
     SessionPresetRef,
     ViewerSessionError,
     create_viewer_session,
     resolve_viewer_session,
+    verify_derived_optical,
     viewer_session_from_json,
     write_viewer_session,
 )
@@ -115,6 +129,7 @@ from mitsuba_viewer_session import (
 from vdbmat.core.volumes import OpticalPropertyVolume
 from vdbmat.exporters.mitsuba import MitsubaExportConfig, prepare_mitsuba_scene
 from vdbmat.io.zarr import read_volume
+from vdbmat.pipeline import zarr_store_sha256
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -145,6 +160,20 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "files (default: --stage-config parent, or builtin demo presets)",
     )
     parser.add_argument("--stage-config", type=Path, default=None)
+    parser.add_argument(
+        "--mapping-root",
+        type=Path,
+        default=None,
+        help="server-local directory the Input tab's mapping dropdown scans "
+        "for *.optical-mapping.json files (default: checked-in demo mappings)",
+    )
+    parser.add_argument(
+        "--mapping-work-root",
+        type=Path,
+        default=None,
+        help="server-local directory for derived (mapping-applied) run "
+        "bundles (default: WORK_DIR/derived); must not overlap --input-root",
+    )
     parser.add_argument(
         "--session",
         type=Path,
@@ -243,15 +272,53 @@ def _resolve_session_path(root: Path, user_path: Path, *, must_exist: bool) -> P
 
 
 @dataclass(frozen=True, slots=True)
+class SessionDerivation:
+    """Committed record of a mapping applied to the session's source input.
+
+    ``derivation is None`` on an :class:`InputSession` means the session
+    renders its bundle's own ``optical.zarr`` as-is. When present, the Input
+    tab's dropdown still names ``source_candidate`` (root-relative, inside
+    ``--input-root``) as "the input"; ``derived_bundle`` is the actual
+    optical volume being rendered.
+    """
+
+    source_candidate: InputCandidate
+    mapping_candidate: MappingCandidate
+    mapping_digest: str
+    derived_bundle: Path
+
+
+def _require_disjoint_roots(a: Path, b: Path, *, label: str) -> None:
+    """Reject a ``--mapping-work-root`` that overlaps ``--input-root``.
+
+    ``regenerate_optical()`` publishes derived bundles with ``overwrite=True``
+    at a path under its work root; if that work root were inside (or
+    contained) the input root, a derived bundle could collide with or shadow
+    a real catalog entry.
+    """
+    resolved_a = a.resolve()
+    resolved_b = b.resolve()
+    if (
+        resolved_a == resolved_b
+        or resolved_a.is_relative_to(resolved_b)
+        or resolved_b.is_relative_to(resolved_a)
+    ):
+        raise ViewerSessionError("resolve", f"{label}: {a} and {b} must not overlap")
+
+
+@dataclass(frozen=True, slots=True)
 class ViewerStartup:
     initial_input: Path
     initial_config: StageConfig
     input_root: Path
     preset_root: Path
+    mapping_root: Path
+    mapping_work_root: Path
     session_root: Path
     variant: str
     seed: int
     applied_preset: SessionPresetRef | None
+    initial_derivation: SessionDerivation | None = None
 
 
 def _startup_preset_ref(
@@ -275,6 +342,13 @@ def _startup_preset_ref(
 
 def _resolve_viewer_startup(args: argparse.Namespace, work_dir: Path) -> ViewerStartup:
     """Resolve all startup state before importing Mitsuba or building scenes."""
+    mapping_root = resolve_mapping_root(args.mapping_root)
+    mapping_work_root = (
+        args.mapping_work_root
+        if args.mapping_work_root is not None
+        else work_dir / "derived"
+    ).resolve()
+
     if args.session is None:
         assert args.optical_zarr is not None
         initial = (
@@ -284,6 +358,9 @@ def _resolve_viewer_startup(args: argparse.Namespace, work_dir: Path) -> ViewerS
         )
         preset_root = resolve_preset_root(args.preset_root, args.stage_config)
         input_root = resolve_input_root(args.input_root, args.optical_zarr)
+        _require_disjoint_roots(
+            mapping_work_root, input_root, label="--mapping-work-root/--input-root"
+        )
         session_root = _resolve_session_root(
             None if args.session_root is None else args.session_root, None, work_dir
         )
@@ -292,6 +369,8 @@ def _resolve_viewer_startup(args: argparse.Namespace, work_dir: Path) -> ViewerS
             initial_config=initial,
             input_root=input_root,
             preset_root=preset_root,
+            mapping_root=mapping_root,
+            mapping_work_root=mapping_work_root,
             session_root=session_root,
             variant=args.variant or "llvm_ad_rgb",
             seed=MitsubaExportConfig().seed if args.seed is None else args.seed,
@@ -312,9 +391,14 @@ def _resolve_viewer_startup(args: argparse.Namespace, work_dir: Path) -> ViewerS
         raise ViewerSessionError(
             "resolve", "stage preset reference requires --preset-root"
         )
+    if session.mapping is not None and args.mapping_root is None:
+        raise ViewerSessionError("resolve", "mapping reference requires --mapping-root")
     assert args.input_root is not None
     input_root = resolve_input_root(args.input_root, args.input_root)
-    resolved = resolve_viewer_session(session, input_root, preset_root)
+    _require_disjoint_roots(
+        mapping_work_root, input_root, label="--mapping-work-root/--input-root"
+    )
+    resolved = resolve_viewer_session(session, input_root, preset_root, mapping_root)
     if args.variant is not None and args.variant != resolved.variant:
         raise ViewerSessionError(
             "resolve",
@@ -325,15 +409,40 @@ def _resolve_viewer_startup(args: argparse.Namespace, work_dir: Path) -> ViewerS
         raise ViewerSessionError(
             "resolve", f"--seed {args.seed} does not match session seed {resolved.seed}"
         )
+
+    initial_input = resolved.input_candidate.path
+    initial_derivation: SessionDerivation | None = None
+    if resolved.session.mapping is not None:
+        assert resolved.mapping_candidate is not None
+        try:
+            derived = regenerate_optical(
+                resolved.input_candidate.path,
+                resolved.mapping_candidate,
+                mapping_work_root,
+            )
+        except RegenError as error:
+            raise ViewerSessionError(error.stage, error.message) from error
+        verify_derived_optical(resolved, derived.optical_zarr)
+        initial_input = derived.bundle_path
+        initial_derivation = SessionDerivation(
+            source_candidate=resolved.input_candidate,
+            mapping_candidate=resolved.mapping_candidate,
+            mapping_digest=resolved.session.mapping.digest,
+            derived_bundle=derived.bundle_path,
+        )
+
     return ViewerStartup(
-        initial_input=resolved.input_candidate.path,
+        initial_input=initial_input,
         initial_config=resolved.stage_config,
         input_root=input_root,
         preset_root=preset_root,
+        mapping_root=mapping_root,
+        mapping_work_root=mapping_work_root,
         session_root=session_root,
         variant=resolved.variant,
         seed=resolved.seed,
         applied_preset=resolved.session.preset,
+        initial_derivation=initial_derivation,
     )
 
 
@@ -434,8 +543,9 @@ def _session_work_dir(work_dir: Path, seq: int, optical_zarr: Path) -> Path:
     return work_dir / _INPUTS_DIRNAME / f"{seq:03d}-{_slug_for(optical_zarr)}"
 
 
-_LOAD_STAGES = ("validate", "prepare", "load", "smoke", "swap")
+_LOAD_STAGES = ("validate", "map", "prepare", "load", "smoke", "swap")
 _NO_PRESETS = "(no presets found)"
+_AS_IS_MAPPING = "(bundle optical as-is)"
 
 
 class InputLoadError(Exception):
@@ -618,6 +728,7 @@ class InputSession:
     preview_scene: TraversedPreviewScene
     base_final: object | None = None
     final_key: FinalRenderKey | None = None
+    derivation: SessionDerivation | None = None
 
 
 class StageCore:
@@ -819,11 +930,51 @@ class StageCore:
         seed: int | None = None,
         on_stage: Callable[[str], None] = lambda stage: None,
     ) -> InputSession:
-        """Build and smoke-test an input without changing the live session."""
-        session_seed = self._session.seed if seed is None else seed
+        """Resolve a catalog reference, then build and smoke-test its session.
+
+        Thin wrapper around :meth:`prepare_candidate_session` that adds the
+        ``--input-root`` catalog-resolution step; the live session is never
+        changed. The wrapper's own ``on_stage("validate")`` covers both
+        catalog resolution and the delegate's content validation, so the
+        delegate's inner "validate" callback is suppressed to keep the
+        stage sequence a caller sees exactly one "validate" long.
+        """
         on_stage("validate")
         try:
             candidate = resolve_candidate(root, user_path)
+        except Exception as error:
+            raise InputLoadError("validate", str(error)) from error
+        return self.prepare_candidate_session(
+            candidate,
+            current_config,
+            smoke_spp,
+            seed=seed,
+            on_stage=lambda stage: None if stage == "validate" else on_stage(stage),
+        )
+
+    def prepare_candidate_session(
+        self,
+        candidate: InputCandidate,
+        current_config: StageConfig,
+        smoke_spp: int,
+        *,
+        seed: int | None = None,
+        on_stage: Callable[[str], None] = lambda stage: None,
+    ) -> InputSession:
+        """Build and smoke-test an already-resolved candidate's session.
+
+        Split out from :meth:`prepare_input_session` so a caller that
+        already has an :class:`InputCandidate` outside ``--input-root``
+        (e.g. a mapping-derived bundle under ``--mapping-work-root``) can
+        drive the same validate/prepare/load/smoke transaction without
+        going through catalog path resolution. The live session is never
+        changed; ``derivation`` is not set here (the caller attaches it to
+        the returned session, since only the caller knows whether this
+        candidate came from a mapping or an as-is catalog selection).
+        """
+        session_seed = self._session.seed if seed is None else seed
+        on_stage("validate")
+        try:
             volume = read_volume(candidate.optical_zarr)
             if not isinstance(volume, OpticalPropertyVolume):
                 raise InputLoadError(
@@ -1525,14 +1676,31 @@ class ViewerApp:
 
         try:
             startup = _resolve_viewer_startup(args, work_dir)
-        except (InputCatalogError, PresetCatalogError, ViewerSessionError) as error:
+        except (
+            InputCatalogError,
+            PresetCatalogError,
+            MappingCatalogError,
+            RegenError,
+            ViewerSessionError,
+        ) as error:
             raise SystemExit(str(error)) from error
         initial = startup.initial_config
         self.preset_root = startup.preset_root
+        self.mapping_root = startup.mapping_root
+        self.mapping_work_root = startup.mapping_work_root
         self.session_root = startup.session_root
         self.applied_preset = startup.applied_preset
+        self._committed_derivation = startup.initial_derivation
 
-        self._initial_input_path = startup.initial_input.resolve()
+        # The Input tab always names the *source* catalog entry as "the
+        # input" — even when a mapping derivation is active and the scene
+        # actually being rendered lives under --mapping-work-root, outside
+        # --input-root (see SessionDerivation).
+        self._initial_input_path = (
+            startup.initial_derivation.source_candidate.path
+            if startup.initial_derivation is not None
+            else startup.initial_input
+        ).resolve()
         self.input_root = startup.input_root
         if self._initial_input_path.is_relative_to(self.input_root):
             self._initial_sentinel: str | None = None
@@ -1552,6 +1720,8 @@ class ViewerApp:
             variant=startup.variant,
             seed=startup.seed,
         )
+        if startup.initial_derivation is not None:
+            self.core._session.derivation = startup.initial_derivation
         self.interactive_spp = args.interactive_spp
         self.worker = RenderWorker(settle_delay=args.settle_delay)
         self.server = viser.ViserServer(host="127.0.0.1", port=args.port)
@@ -1679,19 +1849,53 @@ class ViewerApp:
         if selection == self._initial_sentinel:
             raise ViewerSessionError("capture", "current input is outside --input-root")
         candidate = resolve_candidate(self.input_root, Path(selection))
-        if (
-            candidate.optical_zarr.resolve()
-            != self.core.current_session.optical_zarr.resolve()
-        ):
-            raise ViewerSessionError(
-                "capture", "current input selection does not match the live scene"
+        live_session = self.core.current_session
+        derivation = live_session.derivation
+        mapping_ref: SessionMappingRef | None = None
+        if derivation is None:
+            if candidate.optical_zarr.resolve() != live_session.optical_zarr.resolve():
+                raise ViewerSessionError(
+                    "capture", "current input selection does not match the live scene"
+                )
+        else:
+            if candidate.path.resolve() != derivation.source_candidate.path.resolve():
+                raise ViewerSessionError(
+                    "capture",
+                    "current input selection does not match the live scene's "
+                    "mapping source",
+                )
+            try:
+                current_mapping_candidate = resolve_mapping_candidate(
+                    self.mapping_root,
+                    Path(derivation.mapping_candidate.root_relative),
+                )
+                current_mapping_digest = load_mapping(current_mapping_candidate).digest
+            except MappingCatalogError as error:
+                raise ViewerSessionError("capture", f"mapping: {error}") from error
+            if current_mapping_digest != derivation.mapping_digest:
+                raise ViewerSessionError(
+                    "capture",
+                    "mapping file has changed since it was applied; "
+                    "Load/Rebuild again before saving",
+                )
+            try:
+                derived_digest = zarr_store_sha256(live_session.optical_zarr)
+            except OSError as error:
+                raise ViewerSessionError(
+                    "capture", f"cannot digest derived optical store: {error}"
+                ) from error
+            mapping_ref = SessionMappingRef(
+                path=derivation.mapping_candidate.root_relative,
+                digest=current_mapping_digest,
+                derived_optical_sha256=derived_digest,
             )
         session = create_viewer_session(
             candidate,
             self.binder.current(),
             self.core.mi.variant(),
-            self.core.current_session.seed,
+            live_session.seed,
             preset=self.applied_preset,
+            mapping=mapping_ref,
         )
         write_viewer_session(path, session)
 
@@ -1729,6 +1933,7 @@ class ViewerApp:
             session,
             self.input_root,
             self.preset_root,
+            self.mapping_root,
             on_stage=on_stage,
         )
         if resolved.variant != self.core.mi.variant():
@@ -1738,18 +1943,59 @@ class ViewerApp:
                 f"{self.core.mi.variant()}; restart the viewer with --session",
             )
 
-        prepared = self.core.prepare_input_session(
-            self.input_root,
-            Path(session.input.path),
-            resolved.stage_config,
-            self.interactive_spp,
-            seed=resolved.seed,
-            on_stage=lambda stage: on_stage(stage) if stage != "validate" else None,
-        )
+        derivation: SessionDerivation | None = None
+        if resolved.session.mapping is not None:
+            assert resolved.mapping_candidate is not None
+            try:
+                derived = regenerate_optical(
+                    resolved.input_candidate.path,
+                    resolved.mapping_candidate,
+                    self.mapping_work_root,
+                    on_stage=lambda stage: (
+                        None if stage == "validate" else on_stage(stage)
+                    ),
+                )
+            except RegenError as error:
+                raise ViewerSessionError(error.stage, error.message) from error
+            if derived.reused:
+                on_stage("map: reused cache")
+            on_stage("verify")
+            verify_derived_optical(resolved, derived.optical_zarr)
+            derived_candidate = InputCandidate(
+                kind=InputKind.RUN_BUNDLE,
+                root_relative=derived.bundle_path.name,
+                path=derived.bundle_path,
+                optical_zarr=derived.optical_zarr,
+            )
+            prepared = self.core.prepare_candidate_session(
+                derived_candidate,
+                resolved.stage_config,
+                self.interactive_spp,
+                seed=resolved.seed,
+                on_stage=lambda stage: None if stage == "validate" else on_stage(stage),
+            )
+            derivation = SessionDerivation(
+                source_candidate=resolved.input_candidate,
+                mapping_candidate=resolved.mapping_candidate,
+                mapping_digest=resolved.session.mapping.digest,
+                derived_bundle=derived.bundle_path,
+            )
+            prepared.derivation = derivation
+        else:
+            prepared = self.core.prepare_input_session(
+                self.input_root,
+                Path(session.input.path),
+                resolved.stage_config,
+                self.interactive_spp,
+                seed=resolved.seed,
+                on_stage=lambda stage: None if stage == "validate" else on_stage(stage),
+            )
+
         old_core_session = self.core.current_session
         old_generation = self.core.session_generation
         old_config = self.binder.current()
         old_selection = self._current_selection
+        old_mapping_selection = self._committed_mapping_selection()
         old_source = self.applied_preset
         on_stage("commit")
         try:
@@ -1757,6 +2003,12 @@ class ViewerApp:
             self.core.swap_session(prepared)
             self._current_selection = session.input.path
             self.input_dropdown.value = session.input.path
+            self._committed_derivation = derivation
+            mapping_selection = (
+                session.mapping.path if session.mapping is not None else _AS_IS_MAPPING
+            )
+            if mapping_selection in tuple(self.mapping_dropdown.options):
+                self.mapping_dropdown.value = mapping_selection
             self.applied_preset = session.preset
             if session.preset is not None:
                 options = tuple(self.preset_dropdown.options)
@@ -1766,10 +2018,13 @@ class ViewerApp:
             self.core._session = old_core_session
             self.core.session_generation = old_generation
             self._current_selection = old_selection
+            self._committed_derivation = old_core_session.derivation
             self.applied_preset = old_source
             try:
                 self.binder.replace_config(old_config)
                 self.input_dropdown.value = old_selection
+                if old_mapping_selection in tuple(self.mapping_dropdown.options):
+                    self.mapping_dropdown.value = old_mapping_selection
             finally:
                 _discard_session_dir(prepared.work_dir)
             raise ViewerSessionError("commit", str(error)) from error
@@ -1799,6 +2054,7 @@ class ViewerApp:
                 self.status.content = "session loaded"
                 self._update_input_summary()
                 self._update_preset_summary()
+                self._update_mapping_summary()
                 self._schedule_preview()
             finally:
                 self.session_load_button.disabled = False
@@ -1958,6 +2214,44 @@ class ViewerApp:
             lines.append(f"- notes: {summary.provenance_notes}")
         return "\n".join(lines)
 
+    def _committed_mapping_selection(self) -> str:
+        derivation = self._committed_derivation
+        if derivation is None:
+            return _AS_IS_MAPPING
+        return derivation.mapping_candidate.root_relative
+
+    def _mapping_options(self) -> list[str]:
+        relatives = [c.root_relative for c in scan_mapping_catalog(self.mapping_root)]
+        options = [_AS_IS_MAPPING, *relatives]
+        committed = self._committed_mapping_selection()
+        if committed not in options:
+            options.append(committed)
+        return options
+
+    def _describe_mapping_selection(self, selection: str) -> str:
+        if selection == _AS_IS_MAPPING:
+            return (
+                "Render the selected input's bundle `optical.zarr` as-is "
+                "(no material re-mapping)."
+            )
+        try:
+            candidate = resolve_mapping_candidate(self.mapping_root, Path(selection))
+            summary = describe_mapping(candidate)
+        except Exception as error:
+            return f"**cannot describe mapping**: {error}"
+        materials = ", ".join(
+            f"{material_id}:{name}" for material_id, name in summary.materials
+        )
+        return "\n".join(
+            (
+                f"- configuration id: {summary.configuration_id}",
+                f"- version: {summary.version}",
+                f"- calibration status: {summary.calibration_status}",
+                f"- materials: {materials}",
+                f"- digest: `{summary.digest}`",
+            )
+        )
+
     def _build_input_tab(self, gui) -> None:
         options = self._dropdown_options()
         self.input_dropdown = gui.add_dropdown(
@@ -1967,6 +2261,17 @@ class ViewerApp:
         self.input_summary = gui.add_markdown(
             self._describe_selection(self._current_selection)
         )
+        mapping_options = self._mapping_options()
+        mapping_selection = self._committed_mapping_selection()
+        if mapping_selection not in mapping_options:
+            mapping_selection = _AS_IS_MAPPING
+        self.mapping_dropdown = gui.add_dropdown(
+            "optical mapping", tuple(mapping_options), initial_value=mapping_selection
+        )
+        self.mapping_refresh_button = gui.add_button("Refresh")
+        self.mapping_summary = gui.add_markdown(
+            self._describe_mapping_selection(mapping_selection)
+        )
         self.input_load_button = gui.add_button("Load / Rebuild")
         self.session_load_path = gui.add_text(
             "session path (session-root relative)", "viewer.session.json"
@@ -1975,6 +2280,10 @@ class ViewerApp:
 
         self.input_dropdown.on_update(lambda _event: self._update_input_summary())
         self.input_refresh_button.on_click(lambda _event: self._refresh_input_catalog())
+        self.mapping_dropdown.on_update(lambda _event: self._update_mapping_summary())
+        self.mapping_refresh_button.on_click(
+            lambda _event: self._refresh_mapping_catalog()
+        )
         self.input_load_button.on_click(lambda _event: self._queue_load_input())
         self.session_load_button.on_click(lambda _event: self._queue_load_session())
 
@@ -1989,9 +2298,105 @@ class ViewerApp:
             self.input_dropdown.value = self._current_selection
         self._update_input_summary()
 
+    def _update_mapping_summary(self) -> None:
+        self.mapping_summary.content = self._describe_mapping_selection(
+            self.mapping_dropdown.value
+        )
+
+    def _refresh_mapping_catalog(self) -> None:
+        options = self._mapping_options()
+        previous = self.mapping_dropdown.value
+        self.mapping_dropdown.options = tuple(options)
+        if previous not in options:
+            self.mapping_dropdown.value = self._committed_mapping_selection()
+        self._update_mapping_summary()
+
+    def _load_input_transaction(
+        self,
+        selection: str,
+        mapping_selection: str,
+        current_config: StageConfig,
+        on_stage: Callable[[str], None],
+    ) -> SessionDerivation | None:
+        """Validate, build, and swap one Input-tab selection.
+
+        ``mapping_selection == _AS_IS_MAPPING`` delegates entirely to
+        :meth:`StageCore.load_input` (Phase 2/3 behaviour, unchanged).
+        Otherwise the selected input must be a run bundle; its mapping is
+        applied via :func:`regenerate_optical` (reusing a cached derived
+        bundle when the source payload and mapping digest are unchanged)
+        before the resulting candidate is prepared and swapped in. Returns
+        the committed :class:`SessionDerivation`, or ``None`` for an as-is
+        load — mirrors :meth:`_load_session_transaction`'s split between a
+        testable transaction method and its ``_queue_*`` job wrapper.
+        """
+        root, user_path = self._root_and_path_for(selection)
+        if mapping_selection == _AS_IS_MAPPING:
+            self.core.load_input(
+                root,
+                user_path,
+                current_config,
+                self.interactive_spp,
+                on_stage=on_stage,
+            )
+            return None
+
+        on_stage("validate")
+        try:
+            candidate = resolve_candidate(root, user_path)
+        except Exception as error:
+            raise InputLoadError("validate", str(error)) from error
+        if candidate.kind is not InputKind.RUN_BUNDLE:
+            raise InputLoadError(
+                "validate",
+                "applying a mapping requires a run bundle input, "
+                f"not {candidate.kind.value}",
+            )
+        try:
+            mapping_candidate = resolve_mapping_candidate(
+                self.mapping_root, Path(mapping_selection)
+            )
+        except MappingCatalogError as error:
+            raise InputLoadError("validate", str(error)) from error
+
+        try:
+            derived = regenerate_optical(
+                candidate.path,
+                mapping_candidate,
+                self.mapping_work_root,
+                on_stage=lambda stage: None if stage == "validate" else on_stage(stage),
+            )
+        except RegenError as error:
+            raise InputLoadError(error.stage, error.message) from error
+        if derived.reused:
+            on_stage("map: reused cache")
+
+        derived_candidate = InputCandidate(
+            kind=InputKind.RUN_BUNDLE,
+            root_relative=derived.bundle_path.name,
+            path=derived.bundle_path,
+            optical_zarr=derived.optical_zarr,
+        )
+        session = self.core.prepare_candidate_session(
+            derived_candidate,
+            current_config,
+            self.interactive_spp,
+            on_stage=lambda stage: None if stage == "validate" else on_stage(stage),
+        )
+        derivation = SessionDerivation(
+            source_candidate=candidate,
+            mapping_candidate=mapping_candidate,
+            mapping_digest=derived.mapping_digest,
+            derived_bundle=derived.bundle_path,
+        )
+        session.derivation = derivation
+        on_stage("swap")
+        self.core.swap_session(session)
+        return derivation
+
     def _queue_load_input(self) -> None:
         selection = self.input_dropdown.value
-        root, user_path = self._root_and_path_for(selection)
+        mapping_selection = self.mapping_dropdown.value
         current_config = self.binder.current()
 
         self.input_load_button.disabled = True
@@ -2002,18 +2407,15 @@ class ViewerApp:
 
         def job() -> None:
             try:
-                self.core.load_input(
-                    root,
-                    user_path,
-                    current_config,
-                    self.interactive_spp,
-                    on_stage=on_stage,
+                derivation = self._load_input_transaction(
+                    selection, mapping_selection, current_config, on_stage
                 )
             except InputLoadError as error:
                 self.status.content = f"**{error}**"
                 print(f"INPUT LOAD ERROR {error}", file=sys.stderr)
             else:
                 self._current_selection = selection
+                self._committed_derivation = derivation
                 self.status.content = "input loaded"
                 self._schedule_preview()
             finally:

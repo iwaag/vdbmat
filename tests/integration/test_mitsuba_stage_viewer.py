@@ -10,9 +10,19 @@ import numpy as np
 import pytest
 
 from vdbmat.exporters.mitsuba import MitsubaExportConfig, prepare_mitsuba_scene
-from vdbmat.fixtures import homogeneous_transparent, transparent_opaque_interface
+from vdbmat.fixtures import (
+    homogeneous_transparent,
+    transparent_opaque_interface,
+    write_phase1_fixtures,
+)
 from vdbmat.io import read_material_label_manifest, write_volume
-from vdbmat.optics import map_material_volume_to_optical, phase0_provisional_mapping
+from vdbmat.optics import (
+    load_optical_mapping,
+    map_material_volume_to_optical,
+    optical_mapping_to_json_dict,
+    phase0_provisional_mapping,
+)
+from vdbmat.pipeline import PipelineConfig, run_pipeline, zarr_store_sha256
 
 DEMO_DIR = Path(__file__).parents[2] / "examples" / "pipeline_run" / "demo"
 sys.path.insert(0, str(DEMO_DIR))
@@ -27,8 +37,14 @@ from mitsuba_stage import (  # noqa: E402
     apply_stage,
     stage_config_to_dict,
 )
-from mitsuba_stage_inputs import resolve_candidate  # noqa: E402
+from mitsuba_stage_inputs import (  # noqa: E402
+    InputCandidate,
+    InputKind,
+    resolve_candidate,
+)
+from mitsuba_stage_mappings import resolve_mapping_candidate  # noqa: E402
 from mitsuba_stage_presets import load_preset, resolve_preset  # noqa: E402
+from mitsuba_stage_regen import RegenError, regenerate_optical  # noqa: E402
 from mitsuba_stage_viewer import (  # noqa: E402
     InputLoadError,
     StageCore,
@@ -36,6 +52,8 @@ from mitsuba_stage_viewer import (  # noqa: E402
     _session_work_dir,
 )
 from mitsuba_viewer_session import (  # noqa: E402
+    SessionMappingRef,
+    ViewerSessionError,
     create_viewer_session,
     write_viewer_session,
 )
@@ -291,6 +309,39 @@ def _write_bundle_input(root: Path, name: str, volume: object) -> Path:
     return bundle
 
 
+def _write_pipeline_bundle(root: Path, name: str) -> Path:
+    """Publish a real canonical run bundle at ``root / name``.
+
+    Unlike ``_write_bundle_input``, this goes through the actual
+    ``run_pipeline()`` orchestration so the bundle carries a
+    ``source/*.voxels.json`` and a ``run.json`` whose declared digests
+    ``mitsuba_stage_regen.regenerate_optical()`` can verify and re-run.
+    Deterministic Phase 1 fixture inputs are written to a sibling directory
+    (outside ``root``) so the input catalog never sees them as candidates.
+    """
+    fixtures_dir = root.parent / f"{root.name}-pipeline-fixtures"
+    if not fixtures_dir.exists():
+        write_phase1_fixtures(fixtures_dir)
+    config = PipelineConfig(
+        input_kind="direct-voxel",
+        input_path="window_coupon.voxels.json",
+        output_path=str(root / name),
+        mapping_name="phase0-provisional-materials-v1",
+    )
+    result = run_pipeline(config, base_dir=str(fixtures_dir))
+    return result.output_path
+
+
+def _write_mapping_document(path: Path, *, tint: bool = False) -> None:
+    document = optical_mapping_to_json_dict(phase0_provisional_mapping())
+    if tint:
+        for material in document["materials"]:
+            if material["material_id"] == 1:
+                material["sigma_a_rgb_per_m"] = [9.0, 9.0, 9.0]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(document), encoding="utf-8")
+
+
 def test_load_input_round_trip_renders_and_separates_final_artifacts(
     tmp_path: Path,
 ) -> None:
@@ -429,12 +480,19 @@ def test_viewer_session_load_verifies_then_commits_input_config_and_seed(
     app.core = core
     app.input_root = root
     app.preset_root = tmp_path
+    app.mapping_root = tmp_path
+    app.mapping_work_root = tmp_path / "derived"
     app.interactive_spp = 1
     app.binder = Binder()
     app._current_selection = "b.zarr"
+    app._committed_derivation = None
     app.applied_preset = None
     app.input_dropdown = SimpleNamespace(value="b.zarr")
     app.preset_dropdown = SimpleNamespace(options=(), value="")
+    app.mapping_dropdown = SimpleNamespace(
+        options=(mitsuba_stage_viewer._AS_IS_MAPPING,),
+        value=mitsuba_stage_viewer._AS_IS_MAPPING,
+    )
 
     corrupted_path = tmp_path / "corrupted.session.json"
     document = json.loads(session_path.read_text(encoding="utf-8"))
@@ -833,3 +891,514 @@ def test_saved_session_viewer_final_matches_headless_session_replay(
     out = capsys.readouterr().out
     assert f"seed={seed}" in out
     assert "max_depth=17" in out
+
+
+# -- Phase 4: optical mapping selection and canonical re-generation -----------------
+
+
+def test_prepare_candidate_session_builds_from_arbitrary_candidate(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "root"
+    optical_a, optical_b = _write_two_inputs(root)
+    stage = StageConfig(render=RenderSettings(width=8, height=8, spp=1))
+    core = StageCore(
+        optical_a, tmp_path / "work", preview_size=8, preview_spp=1, initial=stage
+    )
+    original = core.current_session
+
+    outside_candidate = InputCandidate(
+        kind=InputKind.OPTICAL_ZARR,
+        root_relative="outside.zarr",
+        path=optical_b,
+        optical_zarr=optical_b,
+    )
+    prepared = core.prepare_candidate_session(outside_candidate, stage, smoke_spp=1)
+
+    assert core.current_session is original
+    assert core.session_generation == 0
+    assert prepared.optical_zarr == optical_b.resolve()
+    assert prepared.derivation is None
+
+
+def test_regenerate_optical_and_prepare_candidate_session_render_derived_bundle(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "root"
+    bundle = _write_pipeline_bundle(root, "bundle")
+    mapping_root = tmp_path / "mappings"
+    mapping_path = mapping_root / "tinted.optical-mapping.json"
+    _write_mapping_document(mapping_path, tint=True)
+    mapping_candidate = resolve_mapping_candidate(
+        mapping_root, Path("tinted.optical-mapping.json")
+    )
+
+    derived = regenerate_optical(bundle, mapping_candidate, tmp_path / "derived")
+
+    stage = StageConfig(render=RenderSettings(width=8, height=8, spp=1))
+    core = StageCore(
+        bundle / "optical.zarr",
+        tmp_path / "work",
+        preview_size=8,
+        preview_spp=1,
+        initial=stage,
+    )
+    derived_candidate = InputCandidate(
+        kind=InputKind.RUN_BUNDLE,
+        root_relative=derived.bundle_path.name,
+        path=derived.bundle_path,
+        optical_zarr=derived.optical_zarr,
+    )
+    session = core.prepare_candidate_session(derived_candidate, stage, smoke_spp=1)
+    core.swap_session(session)
+
+    assert core.current_session.optical_zarr == derived.optical_zarr
+    pixels, _stats, _route = core.render_preview(stage)
+    assert pixels.shape == (8, 8, 3)
+
+
+def test_load_input_transaction_applies_mapping_and_records_derivation(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "root"
+    bundle = _write_pipeline_bundle(root, "bundle")
+    mapping_root = tmp_path / "mappings"
+    _write_mapping_document(mapping_root / "tinted.optical-mapping.json", tint=True)
+
+    stage = StageConfig(render=RenderSettings(width=8, height=8, spp=1))
+    core = StageCore(
+        bundle / "optical.zarr",
+        tmp_path / "work",
+        preview_size=8,
+        preview_spp=1,
+        initial=stage,
+    )
+    original_session = core.current_session
+
+    app = mitsuba_stage_viewer.ViewerApp.__new__(mitsuba_stage_viewer.ViewerApp)
+    app.core = core
+    app.input_root = root
+    app.mapping_root = mapping_root
+    app.mapping_work_root = tmp_path / "derived"
+    app.interactive_spp = 1
+    app._initial_input_path = (bundle / "optical.zarr").resolve()
+    app._initial_sentinel = None
+
+    stages: list[str] = []
+    derivation = app._load_input_transaction(
+        "bundle", "tinted.optical-mapping.json", stage, stages.append
+    )
+
+    assert stages == ["validate", "map", "prepare", "load", "smoke", "swap"]
+    assert derivation is not None
+    assert derivation.source_candidate.path == bundle.resolve()
+    assert derivation.mapping_candidate.root_relative == "tinted.optical-mapping.json"
+    assert core.current_session is not original_session
+    assert core.current_session.derivation is derivation
+    assert (
+        core.current_session.optical_zarr == derivation.derived_bundle / "optical.zarr"
+    )
+
+    pixels, _stats, _route = core.render_preview(stage)
+    assert pixels.shape == (8, 8, 3)
+
+    reused_stages: list[str] = []
+    second_derivation = app._load_input_transaction(
+        "bundle", "tinted.optical-mapping.json", stage, reused_stages.append
+    )
+    assert reused_stages == [
+        "validate",
+        "map: reused cache",
+        "prepare",
+        "load",
+        "smoke",
+        "swap",
+    ]
+    assert second_derivation is not None
+    assert second_derivation.derived_bundle == derivation.derived_bundle
+
+
+def test_load_input_transaction_preserves_map_stage_error_and_live_session(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "root"
+    bundle = _write_pipeline_bundle(root, "bundle")
+    mapping_root = tmp_path / "mappings"
+    _write_mapping_document(mapping_root / "tinted.optical-mapping.json", tint=True)
+    stage = StageConfig(render=RenderSettings(width=8, height=8, spp=1))
+    core = StageCore(
+        bundle / "optical.zarr",
+        tmp_path / "work",
+        preview_size=8,
+        preview_spp=1,
+        initial=stage,
+    )
+    original_session = core.current_session
+
+    app = mitsuba_stage_viewer.ViewerApp.__new__(mitsuba_stage_viewer.ViewerApp)
+    app.core = core
+    app.input_root = root
+    app.mapping_root = mapping_root
+    app.mapping_work_root = tmp_path / "derived"
+    app.interactive_spp = 1
+    app._initial_input_path = (bundle / "optical.zarr").resolve()
+    app._initial_sentinel = None
+
+    def fail_map(*_args: object, **_kwargs: object) -> None:
+        raise RegenError("map", "mapping pipeline failed")
+
+    monkeypatch.setattr(mitsuba_stage_viewer, "regenerate_optical", fail_map)
+    with pytest.raises(InputLoadError, match="mapping pipeline failed") as excinfo:
+        app._load_input_transaction(
+            "bundle", "tinted.optical-mapping.json", stage, lambda _stage: None
+        )
+
+    assert excinfo.value.stage == "map"
+    assert core.current_session is original_session
+    assert core.session_generation == 0
+
+
+def test_load_input_transaction_rejects_mapping_on_standalone_zarr(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "root"
+    optical_a, _optical_b = _write_two_inputs(root)
+    mapping_root = tmp_path / "mappings"
+    _write_mapping_document(mapping_root / "tinted.optical-mapping.json")
+
+    stage = StageConfig(render=RenderSettings(width=8, height=8, spp=1))
+    core = StageCore(
+        optical_a, tmp_path / "work", preview_size=8, preview_spp=1, initial=stage
+    )
+    original_session = core.current_session
+
+    app = mitsuba_stage_viewer.ViewerApp.__new__(mitsuba_stage_viewer.ViewerApp)
+    app.core = core
+    app.input_root = root
+    app.mapping_root = mapping_root
+    app.mapping_work_root = tmp_path / "derived"
+    app.interactive_spp = 1
+    app._initial_input_path = optical_a.resolve()
+    app._initial_sentinel = None
+
+    with pytest.raises(InputLoadError) as excinfo:
+        app._load_input_transaction(
+            "a.zarr", "tinted.optical-mapping.json", stage, lambda _stage: None
+        )
+
+    assert excinfo.value.stage == "validate"
+    assert core.current_session is original_session
+    assert core.session_generation == 0
+
+
+def test_capture_session_records_mapping_and_rejects_stale_mapping_file(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "root"
+    bundle = _write_pipeline_bundle(root, "bundle")
+    mapping_root = tmp_path / "mappings"
+    mapping_path = mapping_root / "tinted.optical-mapping.json"
+    _write_mapping_document(mapping_path, tint=True)
+
+    stage = StageConfig(render=RenderSettings(width=8, height=8, spp=1))
+    core = StageCore(
+        bundle / "optical.zarr",
+        tmp_path / "work",
+        preview_size=8,
+        preview_spp=1,
+        initial=stage,
+    )
+
+    class Binder:
+        def __init__(self) -> None:
+            self.config = stage
+
+        def current(self) -> StageConfig:
+            return self.config
+
+    app = mitsuba_stage_viewer.ViewerApp.__new__(mitsuba_stage_viewer.ViewerApp)
+    app.core = core
+    app.input_root = root
+    app.mapping_root = mapping_root
+    app.mapping_work_root = tmp_path / "derived"
+    app.interactive_spp = 1
+    app._initial_input_path = (bundle / "optical.zarr").resolve()
+    app._initial_sentinel = None
+    app.binder = Binder()
+    app.applied_preset = None
+
+    derivation = app._load_input_transaction(
+        "bundle", "tinted.optical-mapping.json", stage, lambda _stage: None
+    )
+    app._current_selection = "bundle"
+    app._committed_derivation = derivation
+
+    session_path = tmp_path / "session.json"
+    app._capture_session(session_path)
+
+    document = json.loads(session_path.read_text(encoding="utf-8"))
+    assert document["mapping"]["path"] == "tinted.optical-mapping.json"
+    assert document["mapping"]["digest"] == derivation.mapping_digest
+    assert document["mapping"]["derived_optical_sha256"] == zarr_store_sha256(
+        derivation.derived_bundle / "optical.zarr"
+    )
+
+    edited = json.loads(mapping_path.read_text(encoding="utf-8"))
+    edited["materials"][0]["sigma_a_rgb_per_m"] = [1.0, 2.0, 3.0]
+    mapping_path.write_text(json.dumps(edited), encoding="utf-8")
+
+    with pytest.raises(ViewerSessionError, match="mapping file has changed"):
+        app._capture_session(tmp_path / "second.json")
+
+
+def _build_mapping_session_fixture(
+    tmp_path: Path,
+) -> tuple[Path, Path, Path, str, str]:
+    """Build a bundle, a tinted mapping, and its derived optical volume.
+
+    Returns (root, mapping_root, mapping_work_root, mapping_digest,
+    derived_optical_sha256) so callers can assemble a
+    ``SessionMappingRef``-bearing session against a real, cache-consistent
+    derived bundle.
+    """
+    root = tmp_path / "root"
+    _write_pipeline_bundle(root, "bundle-a")
+    mapping_root = tmp_path / "mappings"
+    mapping_path = mapping_root / "tinted.optical-mapping.json"
+    _write_mapping_document(mapping_path, tint=True)
+    mapping_candidate = resolve_mapping_candidate(
+        mapping_root, Path("tinted.optical-mapping.json")
+    )
+    mapping_digest = load_optical_mapping(mapping_path).digest
+    mapping_work_root = tmp_path / "derived"
+    derived = regenerate_optical(
+        root / "bundle-a", mapping_candidate, mapping_work_root
+    )
+    derived_digest = zarr_store_sha256(derived.optical_zarr)
+    return root, mapping_root, mapping_work_root, mapping_digest, derived_digest
+
+
+def test_load_session_transaction_applies_mapping_and_commits_derivation(
+    tmp_path: Path,
+) -> None:
+    root, mapping_root, mapping_work_root, mapping_digest, derived_digest = (
+        _build_mapping_session_fixture(tmp_path)
+    )
+    optical_b = root / "b.zarr"
+    write_volume(
+        optical_b,
+        map_material_volume_to_optical(
+            transparent_opaque_interface().volume, phase0_provisional_mapping()
+        ),
+    )
+    stage = StageConfig(render=RenderSettings(width=8, height=8, spp=1))
+    session = create_viewer_session(
+        resolve_candidate(root, Path("bundle-a")),
+        stage,
+        "llvm_ad_rgb",
+        5,
+        mapping=SessionMappingRef(
+            path="tinted.optical-mapping.json",
+            digest=mapping_digest,
+            derived_optical_sha256=derived_digest,
+        ),
+    )
+    session_path = tmp_path / "session.json"
+    write_viewer_session(session_path, session)
+
+    core = StageCore(
+        optical_b,
+        tmp_path / "work",
+        preview_size=8,
+        preview_spp=1,
+        initial=stage,
+    )
+
+    class Binder:
+        def __init__(self) -> None:
+            self.config = stage
+
+        def current(self) -> StageConfig:
+            return self.config
+
+        def replace_config(self, config: StageConfig) -> None:
+            self.config = config
+
+    app = mitsuba_stage_viewer.ViewerApp.__new__(mitsuba_stage_viewer.ViewerApp)
+    app.core = core
+    app.input_root = root
+    app.preset_root = tmp_path
+    app.mapping_root = mapping_root
+    app.mapping_work_root = mapping_work_root
+    app.interactive_spp = 1
+    app.binder = Binder()
+    app._current_selection = "b.zarr"
+    app._committed_derivation = None
+    app.applied_preset = None
+    app.input_dropdown = SimpleNamespace(value="b.zarr")
+    app.preset_dropdown = SimpleNamespace(options=(), value="")
+    app.mapping_dropdown = SimpleNamespace(
+        options=(mitsuba_stage_viewer._AS_IS_MAPPING, "tinted.optical-mapping.json"),
+        value=mitsuba_stage_viewer._AS_IS_MAPPING,
+    )
+
+    stages: list[str] = []
+    app._load_session_transaction(session_path, stages.append)
+
+    assert "map: reused cache" in stages
+    assert "verify" in stages
+    assert core.current_session.derivation is not None
+    assert core.current_session.derivation.mapping_digest == mapping_digest
+    assert zarr_store_sha256(core.current_session.optical_zarr) == derived_digest
+    assert app._committed_derivation is not None
+    assert app._current_selection == "bundle-a"
+    assert app.mapping_dropdown.value == "tinted.optical-mapping.json"
+
+    pixels, _stats, _route = core.render_preview(stage)
+    assert pixels.shape == (8, 8, 3)
+
+
+def test_load_session_transaction_rejects_derived_digest_mismatch(
+    tmp_path: Path,
+) -> None:
+    root, mapping_root, mapping_work_root, mapping_digest, _derived_digest = (
+        _build_mapping_session_fixture(tmp_path)
+    )
+    optical_b = root / "b.zarr"
+    write_volume(
+        optical_b,
+        map_material_volume_to_optical(
+            transparent_opaque_interface().volume, phase0_provisional_mapping()
+        ),
+    )
+    stage = StageConfig(render=RenderSettings(width=8, height=8, spp=1))
+    bogus_digest = "sha256:" + "0" * 64
+    session = create_viewer_session(
+        resolve_candidate(root, Path("bundle-a")),
+        stage,
+        "llvm_ad_rgb",
+        5,
+        mapping=SessionMappingRef(
+            path="tinted.optical-mapping.json",
+            digest=mapping_digest,
+            derived_optical_sha256=bogus_digest,
+        ),
+    )
+    session_path = tmp_path / "session.json"
+    write_viewer_session(session_path, session)
+
+    core = StageCore(
+        optical_b,
+        tmp_path / "work",
+        preview_size=8,
+        preview_spp=1,
+        initial=stage,
+    )
+    original_session = core.current_session
+
+    class Binder:
+        def __init__(self) -> None:
+            self.config = stage
+
+        def current(self) -> StageConfig:
+            return self.config
+
+        def replace_config(self, config: StageConfig) -> None:
+            self.config = config
+
+    app = mitsuba_stage_viewer.ViewerApp.__new__(mitsuba_stage_viewer.ViewerApp)
+    app.core = core
+    app.input_root = root
+    app.preset_root = tmp_path
+    app.mapping_root = mapping_root
+    app.mapping_work_root = mapping_work_root
+    app.interactive_spp = 1
+    app.binder = Binder()
+    app._current_selection = "b.zarr"
+    app._committed_derivation = None
+    app.applied_preset = None
+    app.input_dropdown = SimpleNamespace(value="b.zarr")
+    app.preset_dropdown = SimpleNamespace(options=(), value="")
+    app.mapping_dropdown = SimpleNamespace(
+        options=(mitsuba_stage_viewer._AS_IS_MAPPING, "tinted.optical-mapping.json"),
+        value=mitsuba_stage_viewer._AS_IS_MAPPING,
+    )
+
+    with pytest.raises(ViewerSessionError, match="derived optical digest mismatch"):
+        app._load_session_transaction(session_path, lambda _stage: None)
+
+    assert core.current_session is original_session
+    assert core.session_generation == 0
+    assert app._committed_derivation is None
+    assert app._current_selection == "b.zarr"
+    assert app.mapping_dropdown.value == mitsuba_stage_viewer._AS_IS_MAPPING
+
+
+def test_resolve_viewer_startup_with_mapping_session_builds_derived_input(
+    tmp_path: Path,
+) -> None:
+    root, mapping_root, mapping_work_root, mapping_digest, derived_digest = (
+        _build_mapping_session_fixture(tmp_path)
+    )
+    stage = StageConfig(render=RenderSettings(width=8, height=8, spp=1))
+    bundle_candidate = resolve_candidate(root, Path("bundle-a"))
+    session = create_viewer_session(
+        bundle_candidate,
+        stage,
+        "llvm_ad_rgb",
+        3,
+        mapping=SessionMappingRef(
+            path="tinted.optical-mapping.json",
+            digest=mapping_digest,
+            derived_optical_sha256=derived_digest,
+        ),
+    )
+    session_path = tmp_path / "session.json"
+    write_viewer_session(session_path, session)
+
+    args = mitsuba_stage_viewer._parse_args(
+        [
+            "--session",
+            str(session_path),
+            "--input-root",
+            str(root),
+            "--mapping-root",
+            str(mapping_root),
+            "--mapping-work-root",
+            str(mapping_work_root),
+            "--variant",
+            "llvm_ad_rgb",
+            "--seed",
+            "3",
+        ]
+    )
+    startup = mitsuba_stage_viewer._resolve_viewer_startup(args, tmp_path / "work")
+
+    assert startup.initial_derivation is not None
+    assert startup.initial_input == startup.initial_derivation.derived_bundle
+    assert startup.initial_derivation.source_candidate.path == bundle_candidate.path
+    assert startup.initial_derivation.mapping_digest == mapping_digest
+    assert startup.mapping_root == mapping_root.resolve()
+    assert (
+        zarr_store_sha256(startup.initial_derivation.derived_bundle / "optical.zarr")
+        == derived_digest
+    )
+
+
+def test_resolve_viewer_startup_rejects_overlapping_mapping_work_root(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "root"
+    optical_a, _optical_b = _write_two_inputs(root)
+    args = mitsuba_stage_viewer._parse_args(
+        [
+            str(optical_a),
+            "--input-root",
+            str(root),
+            "--mapping-work-root",
+            str(root / "derived"),
+        ]
+    )
+
+    with pytest.raises(ViewerSessionError, match="overlap"):
+        mitsuba_stage_viewer._resolve_viewer_startup(args, tmp_path / "work")

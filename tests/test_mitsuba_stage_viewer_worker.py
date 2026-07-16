@@ -12,6 +12,7 @@ import numpy as np
 DEMO_DIR = Path(__file__).parents[1] / "examples" / "pipeline_run" / "demo"
 sys.path.insert(0, str(DEMO_DIR))
 
+import mitsuba_stage_viewer  # noqa: E402
 from mitsuba_stage import (  # noqa: E402
     BackdropSettings,
     BacklightOverride,
@@ -39,7 +40,7 @@ from mitsuba_stage_viewer import (  # noqa: E402
     _slug_for,
     _structure_key,
 )
-from mitsuba_viewer_session import SessionPresetRef  # noqa: E402
+from mitsuba_viewer_session import SessionPresetRef, ViewerSessionError  # noqa: E402
 
 
 class _FakeHandle:
@@ -246,6 +247,72 @@ def test_viewer_cli_accepts_session_root_seed_and_startup_session() -> None:
     assert args.session_root == Path("/sessions")
     assert args.seed == 37
     assert args.variant is None
+
+
+def test_viewer_cli_accepts_mapping_root_and_mapping_work_root() -> None:
+    args = _parse_args(
+        [
+            "input.zarr",
+            "--mapping-root",
+            "/some/mappings",
+            "--mapping-work-root",
+            "/some/derived",
+        ]
+    )
+    assert args.mapping_root == Path("/some/mappings")
+    assert args.mapping_work_root == Path("/some/derived")
+
+
+def test_viewer_cli_mapping_roots_default_to_none() -> None:
+    args = _parse_args(["input.zarr"])
+    assert args.mapping_root is None
+    assert args.mapping_work_root is None
+
+
+def test_require_disjoint_roots_rejects_overlap(tmp_path: Path) -> None:
+    input_root = tmp_path / "inputs"
+    input_root.mkdir()
+    nested = input_root / "derived"
+
+    for a, b in ((nested, input_root), (input_root, input_root)):
+        try:
+            mitsuba_stage_viewer._require_disjoint_roots(a, b, label="test")
+        except ViewerSessionError as error:
+            assert error.stage == "resolve"
+        else:
+            raise AssertionError(f"overlapping roots were accepted: {a}, {b}")
+
+
+def test_require_disjoint_roots_accepts_sibling_directories(tmp_path: Path) -> None:
+    input_root = tmp_path / "inputs"
+    mapping_work_root = tmp_path / "derived"
+    input_root.mkdir()
+    mapping_work_root.mkdir()
+
+    mitsuba_stage_viewer._require_disjoint_roots(
+        mapping_work_root, input_root, label="test"
+    )
+
+
+def test_mapping_refresh_preserves_deleted_committed_selection(tmp_path: Path) -> None:
+    app = ViewerApp.__new__(ViewerApp)
+    app.mapping_root = tmp_path
+    app._committed_derivation = SimpleNamespace(
+        mapping_candidate=SimpleNamespace(root_relative="deleted.optical-mapping.json")
+    )
+    app.mapping_dropdown = SimpleNamespace(
+        options=(), value="uncommitted.optical-mapping.json"
+    )
+    app.mapping_summary = SimpleNamespace(content="")
+
+    app._refresh_mapping_catalog()
+
+    assert app.mapping_dropdown.options == (
+        mitsuba_stage_viewer._AS_IS_MAPPING,
+        "deleted.optical-mapping.json",
+    )
+    assert app.mapping_dropdown.value == "deleted.optical-mapping.json"
+    assert "cannot describe mapping" in app.mapping_summary.content
 
 
 def test_viewer_cli_rejects_missing_or_conflicting_session_inputs() -> None:
