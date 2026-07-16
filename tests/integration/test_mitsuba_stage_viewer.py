@@ -10,12 +10,13 @@ import pytest
 
 from vdbmat.exporters.mitsuba import MitsubaExportConfig, prepare_mitsuba_scene
 from vdbmat.fixtures import homogeneous_transparent
-from vdbmat.io import write_volume
+from vdbmat.io import read_material_label_manifest, write_volume
 from vdbmat.optics import map_material_volume_to_optical, phase0_provisional_mapping
 
 DEMO_DIR = Path(__file__).parents[2] / "examples" / "pipeline_run" / "demo"
 sys.path.insert(0, str(DEMO_DIR))
 
+import mitsuba_stage_demo  # noqa: E402
 from mitsuba_stage import (  # noqa: E402
     BacklightOverride,
     CameraOverride,
@@ -165,3 +166,65 @@ def test_stage_core_final_reprepare_uses_max_depth(tmp_path: Path) -> None:
     assert "max_depth=14" in preview_stats
     assert summary["render"]["max_depth"] == 14
     assert "max_depth=14" in stats
+
+
+@pytest.mark.parametrize("max_depth", [8, 16])
+def test_saved_preset_viewer_final_matches_headless_replay(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    max_depth: int,
+) -> None:
+    repository = Path(__file__).parents[2]
+    material = read_material_label_manifest(
+        repository
+        / "examples/pipeline_run/inputs/nested_material_cube.voxels.json"
+    )
+    volume = map_material_volume_to_optical(material, phase0_provisional_mapping())
+    optical_zarr = tmp_path / "optical.zarr"
+    write_volume(optical_zarr, volume)
+    stage = StageConfig(
+        render=RenderSettings(
+            width=12,
+            height=12,
+            spp=2,
+            max_depth=max_depth,
+        )
+    )
+    preset = tmp_path / "saved.stage.json"
+    viewer_png = tmp_path / "viewer.png"
+    headless_png = tmp_path / "headless.png"
+    StageCore.save_preset(stage, preset)
+    core = StageCore(
+        optical_zarr,
+        tmp_path / "viewer-work",
+        preview_size=12,
+        preview_spp=1,
+        initial=stage,
+    )
+
+    core.render_final(stage, viewer_png)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "mitsuba_stage_demo",
+            str(optical_zarr),
+            str(headless_png),
+            "--stage-config",
+            str(preset),
+            "--variant",
+            "llvm_ad_rgb",
+        ],
+    )
+    mitsuba_stage_demo.main()
+
+    viewer_pixels = np.asarray(mi.Bitmap(str(viewer_png)))
+    headless_pixels = np.asarray(mi.Bitmap(str(headless_png)))
+    headless_summary = json.loads(
+        (tmp_path / "headless_scene/scene-summary.json").read_text(encoding="utf-8")
+    )
+
+    assert np.array_equal(viewer_pixels, headless_pixels)
+    assert headless_summary["render"]["max_depth"] == max_depth
+    assert f"PIXELSTATS max_depth={max_depth}" in capsys.readouterr().out

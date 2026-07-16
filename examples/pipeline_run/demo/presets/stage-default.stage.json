@@ -1,10 +1,11 @@
 {
   "format": "vdbmat.stage-config",
-  "format_version": "1.0.0",
+  "format_version": "1.1.0",
   "render": {
     "width": 512,
     "height": 512,
-    "spp": 128
+    "spp": 128,
+    "max_depth": 8
   },
   "backdrop": {
     "enabled": true,
