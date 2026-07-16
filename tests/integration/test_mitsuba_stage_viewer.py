@@ -24,7 +24,9 @@ from mitsuba_stage import (  # noqa: E402
     RenderSettings,
     StageConfig,
     apply_stage,
+    stage_config_to_dict,
 )
+from mitsuba_stage_presets import load_preset, resolve_preset  # noqa: E402
 from mitsuba_stage_viewer import (  # noqa: E402
     InputLoadError,
     StageCore,
@@ -173,6 +175,48 @@ def test_stage_core_final_reprepare_uses_max_depth(tmp_path: Path) -> None:
     assert "max_depth=14" in preview_stats
     assert summary["render"]["max_depth"] == 14
     assert "max_depth=14" in stats
+
+
+def test_loaded_stage_preset_drives_preview_and_final_render(tmp_path: Path) -> None:
+    volume = map_material_volume_to_optical(
+        homogeneous_transparent().volume, phase0_provisional_mapping()
+    )
+    optical_zarr = tmp_path / "optical.zarr"
+    write_volume(optical_zarr, volume)
+    initial = StageConfig(
+        render=RenderSettings(width=8, height=8, spp=1, max_depth=8)
+    )
+    applied = replace(
+        initial,
+        render=replace(initial.render, max_depth=15),
+        camera=CameraOverride(-35.0, 22.0, 4.2, 40.0),
+    )
+    preset_root = tmp_path / "presets"
+    preset_root.mkdir()
+    preset = preset_root / "applied.stage.json"
+    preset.write_text(json.dumps(stage_config_to_dict(applied)))
+    loaded = load_preset(resolve_preset(preset_root, Path(preset.name)))
+    core = StageCore(
+        optical_zarr,
+        tmp_path / "work",
+        preview_size=8,
+        preview_spp=1,
+        initial=initial,
+    )
+
+    pixels, preview_stats, route = core.render_preview(loaded)
+    final_stats = core.render_final(loaded, tmp_path / "preset-final.png")
+    summary = json.loads(
+        (
+            core._session.work_dir / "final_scene" / "scene-summary.json"
+        ).read_text(encoding="utf-8")
+    )
+
+    assert pixels.shape == (8, 8, 3)
+    assert route == "rebuild"
+    assert "max_depth=15" in preview_stats
+    assert "max_depth=15" in final_stats
+    assert summary["render"]["max_depth"] == 15
 
 
 def test_swap_session_uses_fresh_work_dir_and_advances_generation(

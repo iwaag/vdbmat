@@ -37,7 +37,7 @@ Invoke on the host (no Docker needed for Mitsuba):
     uv run --group mitsuba-viewer python \
         examples/pipeline_run/demo/mitsuba_stage_viewer.py -- \
         OPTICAL_ZARR_OR_BUNDLE [--input-root DIR] \
-        [--stage-config PRESET.stage.json] [--port 8080] \
+        [--stage-config PRESET.stage.json] [--preset-root DIR] [--port 8080] \
         [--work-dir DIR] [--preview-size 256] [--preview-spp 16] \
         [--interactive-spp 4] [--settle-delay 0.35] \
         [--variant llvm_ad_rgb|cuda_ad_rgb] \
@@ -94,6 +94,16 @@ from mitsuba_stage_inputs import (
     resolve_input_root,
     scan_input_catalog,
 )
+from mitsuba_stage_presets import (
+    PresetCatalogError,
+    describe_preset,
+    load_preset,
+    resolve_preset,
+    resolve_preset_root,
+    scan_preset_catalog,
+    stage_config_digest,
+)
+from mitsuba_viewer_session import SessionPresetRef
 
 from vdbmat.core.volumes import OpticalPropertyVolume
 from vdbmat.exporters.mitsuba import MitsubaExportConfig, prepare_mitsuba_scene
@@ -118,6 +128,13 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=None,
         help="server-local directory the Input tab scans for switchable "
         "bundles/stores (default: the initial input's parent directory)",
+    )
+    parser.add_argument(
+        "--preset-root",
+        type=Path,
+        default=None,
+        help="server-local directory the Preset tab scans for *.stage.json "
+        "files (default: --stage-config parent, or builtin demo presets)",
     )
     parser.add_argument("--stage-config", type=Path, default=None)
     parser.add_argument("--port", type=int, default=8080)
@@ -260,6 +277,7 @@ def _session_work_dir(work_dir: Path, seq: int, optical_zarr: Path) -> Path:
 
 
 _LOAD_STAGES = ("validate", "prepare", "load", "smoke", "swap")
+_NO_PRESETS = "(no presets found)"
 
 
 class InputLoadError(Exception):
@@ -869,10 +887,12 @@ class StageBinder:
         on_change: Callable[[], None],
         *,
         input_tab: Callable[[object], None] | None = None,
+        preset_tab: Callable[[object], None] | None = None,
     ) -> None:
         self.base = base
         self.dirty: set[str] = set()
         self._on_change = on_change
+        self._suspend_updates = False
         gui = server.gui
         camera_base = base.camera if base.camera is not None else CameraOverride()
         backlight_base = (
@@ -889,6 +909,9 @@ class StageBinder:
             # Input comes first: choosing what to render precedes tuning how.
             with self.tabs.add_tab("Input"):
                 input_tab(gui)
+        if preset_tab is not None:
+            with self.tabs.add_tab("Preset"):
+                preset_tab(gui)
         with self.tabs.add_tab("Render"):
             self.width = gui.add_number(
                 "width", base.render.width, min=16, max=4096, step=16
@@ -1007,7 +1030,7 @@ class StageBinder:
             self.floor_enabled, self.floor_pattern,
             self.key_enabled, self.camera_enabled, self.backlight_enabled,
         ):
-            handle.on_update(lambda _event: self._on_change())
+            handle.on_update(lambda _event: self._notify_change())
 
     def _slider(self, gui, label, low, high, initial, key):
         clamped = min(max(float(initial), low), high)
@@ -1033,10 +1056,116 @@ class StageBinder:
 
     def _track(self, handle, key: str) -> None:
         def _mark(_event, key: str = key) -> None:
+            if self._suspend_updates:
+                return
             self.dirty.add(key)
-            self._on_change()
+            self._notify_change()
 
         handle.on_update(_mark)
+
+    def _notify_change(self) -> None:
+        if not self._suspend_updates:
+            self._on_change()
+
+    def replace_config(self, config: StageConfig) -> None:
+        """Replace every widget from ``config`` without emitting a change.
+
+        Lossy controls are updated for display, then ``base`` becomes the
+        exact supplied config and dirty tracking is cleared.  Until the user
+        edits one of those controls, :meth:`current` therefore returns the
+        unquantized source values rather than values reconstructed from GUI
+        sliders or 8-bit colour pickers.
+        """
+        camera = config.camera if config.camera is not None else CameraOverride()
+        backlight = (
+            config.backlight
+            if config.backlight is not None
+            else BacklightOverride()
+        )
+        key_colour, key_intensity = _decompose_radiance(
+            config.key_light.radiance
+        )
+        back_colour, back_intensity = _decompose_radiance(backlight.radiance)
+        key_azimuth, key_elevation = _decompose_direction(
+            config.key_light.direction
+        )
+
+        self._suspend_updates = True
+        try:
+            assignments = (
+                (self.width, config.render.width),
+                (self.height, config.render.height),
+                (self.spp, config.render.spp),
+                (self.max_depth, config.render.max_depth),
+                (self.backdrop_enabled, config.backdrop.enabled),
+                (self.backdrop_pattern, config.backdrop.pattern),
+                (
+                    self.backdrop_distance,
+                    min(max(config.backdrop.distance_factor, 0.2), 10.0),
+                ),
+                (
+                    self.backdrop_scale,
+                    min(max(config.backdrop.scale_factor, 0.2), 10.0),
+                ),
+                (
+                    self.backdrop_checker,
+                    min(max(config.backdrop.checker_scale, 1), 32),
+                ),
+                (self.backdrop_color0, _rgb_int(config.backdrop.color0)),
+                (self.backdrop_color1, _rgb_int(config.backdrop.color1)),
+                (self.floor_enabled, config.floor.enabled),
+                (self.floor_pattern, config.floor.pattern),
+                (self.floor_drop, min(max(config.floor.drop_factor, 0.0), 2.0)),
+                (
+                    self.floor_scale,
+                    min(max(config.floor.scale_factor, 0.2), 20.0),
+                ),
+                (
+                    self.floor_checker,
+                    min(max(config.floor.checker_scale, 1), 32),
+                ),
+                (self.floor_color0, _rgb_int(config.floor.color0)),
+                (self.floor_color1, _rgb_int(config.floor.color1)),
+                (self.key_enabled, config.key_light.enabled),
+                (self.key_azimuth, min(max(key_azimuth, -180.0), 180.0)),
+                (self.key_elevation, min(max(key_elevation, -89.0), 89.0)),
+                (
+                    self.key_distance,
+                    min(max(config.key_light.distance_factor, 0.5), 10.0),
+                ),
+                (
+                    self.key_scale,
+                    min(max(config.key_light.scale_factor, 0.1), 5.0),
+                ),
+                (self.key_colour, key_colour),
+                (self.key_intensity, min(max(key_intensity, 0.0), 30.0)),
+                (self.camera_enabled, config.camera is not None),
+                (
+                    self.camera_azimuth,
+                    min(max(camera.azimuth_deg, -180.0), 180.0),
+                ),
+                (
+                    self.camera_elevation,
+                    min(max(camera.elevation_deg, -89.0), 89.0),
+                ),
+                (
+                    self.camera_distance,
+                    min(max(camera.distance_factor, 1.0), 12.0),
+                ),
+                (self.camera_fov, min(max(camera.fov_deg, 10.0), 120.0)),
+                (self.backlight_enabled, config.backlight is not None),
+                (self.backlight_colour, back_colour),
+                (
+                    self.backlight_intensity,
+                    min(max(back_intensity, 0.0), 30.0),
+                ),
+            )
+            for handle, value in assignments:
+                handle.value = value
+            self.base = config
+            self.dirty.clear()
+        finally:
+            self._suspend_updates = False
 
     def _value(self, key: str, handle, fallback):
         return float(handle.value) if key in self.dirty else fallback
@@ -1180,6 +1309,16 @@ class ViewerApp:
         else:
             initial = StageConfig()
 
+        try:
+            self.preset_root = resolve_preset_root(
+                args.preset_root, args.stage_config
+            )
+        except PresetCatalogError as error:
+            raise SystemExit(str(error)) from error
+        self.applied_preset = self._initial_applied_preset(
+            args.stage_config, initial
+        )
+
         self._initial_input_path = args.optical_zarr.resolve()
         try:
             self.input_root = resolve_input_root(args.input_root, args.optical_zarr)
@@ -1237,8 +1376,9 @@ class ViewerApp:
         self.binder = StageBinder(
             self.server,
             initial,
-            self._schedule_preview,
+            self._on_stage_change,
             input_tab=self._build_input_tab,
+            preset_tab=self._build_preset_tab,
         )
 
         preset_default = args.preset_out or (work_dir / "viewer.stage.json")
@@ -1263,8 +1403,29 @@ class ViewerApp:
 
     # -- worker-side operations -------------------------------------------
 
+    def _initial_applied_preset(
+        self, stage_config_path: Path | None, config: StageConfig
+    ) -> SessionPresetRef | None:
+        """Return provenance when the startup preset belongs to preset-root."""
+        if stage_config_path is None:
+            return None
+        try:
+            relative = stage_config_path.resolve().relative_to(self.preset_root)
+            candidate = resolve_preset(self.preset_root, relative)
+            loaded = load_preset(candidate)
+        except (OSError, PresetCatalogError, ValueError):
+            return None
+        digest = stage_config_digest(config)
+        if stage_config_digest(loaded) != digest:
+            return None
+        return SessionPresetRef(path=candidate.root_relative, digest=digest)
+
     def _current_session_generation(self) -> int:
         return self.core.session_generation
+
+    def _on_stage_change(self) -> None:
+        self.applied_preset = None
+        self._schedule_preview()
 
     def _schedule_preview(self) -> None:
         self.status.content = "rendering preview…"
@@ -1335,6 +1496,103 @@ class ViewerApp:
     def _show_error(self, message: str) -> None:
         self.status.content = f"**render error**\n```\n{message}\n```"
         print(f"RENDER ERROR {message}", file=sys.stderr)
+
+    # -- Preset tab --------------------------------------------------------
+    #
+    # Selecting and describing a preset are read-only.  Only the explicit
+    # Apply button replaces the binder config and schedules one preview.
+
+    def _preset_options(self) -> list[str]:
+        options = [
+            candidate.root_relative
+            for candidate in scan_preset_catalog(self.preset_root)
+        ]
+        return options or [_NO_PRESETS]
+
+    def _describe_preset_selection(self, selection: str) -> str:
+        if selection == _NO_PRESETS:
+            return "No `*.stage.json` presets found under `--preset-root`."
+        try:
+            candidate = resolve_preset(self.preset_root, Path(selection))
+            summary = describe_preset(candidate)
+        except Exception as error:
+            return f"**cannot describe stage preset**: {error}"
+        return "\n".join(
+            (
+                f"- format version: {summary.format_version}",
+                f"- render: {summary.width}x{summary.height}, "
+                f"spp {summary.spp}, max depth {summary.max_depth}",
+                f"- camera override: {summary.camera_override}",
+                f"- backlight override: {summary.backlight_override}",
+                f"- digest: `{summary.digest}`",
+            )
+        )
+
+    def _build_preset_tab(self, gui) -> None:
+        options = self._preset_options()
+        applied_path = (
+            self.applied_preset.path if self.applied_preset is not None else None
+        )
+        selection = applied_path if applied_path in options else options[0]
+        self.preset_dropdown = gui.add_dropdown(
+            "stage preset", tuple(options), initial_value=selection
+        )
+        self.preset_refresh_button = gui.add_button("Refresh")
+        self.preset_summary = gui.add_markdown(
+            self._describe_preset_selection(selection)
+        )
+        self.preset_apply_button = gui.add_button("Apply stage preset")
+
+        self.preset_dropdown.on_update(
+            lambda _event: self._update_preset_summary()
+        )
+        self.preset_refresh_button.on_click(
+            lambda _event: self._refresh_preset_catalog()
+        )
+        self.preset_apply_button.on_click(
+            lambda _event: self._apply_stage_preset()
+        )
+
+    def _update_preset_summary(self) -> None:
+        self.preset_summary.content = self._describe_preset_selection(
+            self.preset_dropdown.value
+        )
+
+    def _refresh_preset_catalog(self) -> None:
+        options = self._preset_options()
+        previous = self.preset_dropdown.value
+        self.preset_dropdown.options = tuple(options)
+        if previous not in options:
+            applied_path = (
+                self.applied_preset.path
+                if self.applied_preset is not None
+                else None
+            )
+            self.preset_dropdown.value = (
+                applied_path if applied_path in options else options[0]
+            )
+        self._update_preset_summary()
+
+    def _apply_stage_preset(self) -> None:
+        selection = self.preset_dropdown.value
+        if selection == _NO_PRESETS:
+            self.status.content = "**cannot apply stage preset**: no presets found"
+            return
+        try:
+            candidate = resolve_preset(self.preset_root, Path(selection))
+            config = load_preset(candidate)
+            source = SessionPresetRef(
+                path=candidate.root_relative,
+                digest=stage_config_digest(config),
+            )
+        except (PresetCatalogError, TypeError, ValueError) as error:
+            self.status.content = f"**cannot apply stage preset**: {error}"
+            return
+
+        self.binder.replace_config(config)
+        self.applied_preset = source
+        self.status.content = f"stage preset applied: {candidate.root_relative}"
+        self._schedule_preview()
 
     # -- Input tab ----------------------------------------------------------
     #
