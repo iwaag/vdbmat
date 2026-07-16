@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 
 from vdbmat.exporters.mitsuba import MitsubaExportConfig, prepare_mitsuba_scene
-from vdbmat.fixtures import homogeneous_transparent
+from vdbmat.fixtures import homogeneous_transparent, transparent_opaque_interface
 from vdbmat.io import read_material_label_manifest, write_volume
 from vdbmat.optics import map_material_volume_to_optical, phase0_provisional_mapping
 
@@ -17,6 +17,7 @@ DEMO_DIR = Path(__file__).parents[2] / "examples" / "pipeline_run" / "demo"
 sys.path.insert(0, str(DEMO_DIR))
 
 import mitsuba_stage_demo  # noqa: E402
+import mitsuba_stage_viewer  # noqa: E402
 from mitsuba_stage import (  # noqa: E402
     BacklightOverride,
     CameraOverride,
@@ -25,6 +26,7 @@ from mitsuba_stage import (  # noqa: E402
     apply_stage,
 )
 from mitsuba_stage_viewer import (  # noqa: E402
+    InputLoadError,
     StageCore,
     TraversedPreviewScene,
     _session_work_dir,
@@ -209,6 +211,171 @@ def test_swap_session_uses_fresh_work_dir_and_advances_generation(
     # The swapped-in session renders through the normal StageCore API.
     pixels, _stats, _route = core.render_preview(initial)
     assert pixels.shape == (8, 8, 3)
+
+
+def _write_two_inputs(root: Path) -> tuple[Path, Path]:
+    root.mkdir()
+    volume_a = map_material_volume_to_optical(
+        homogeneous_transparent().volume, phase0_provisional_mapping()
+    )
+    optical_a = root / "a.zarr"
+    write_volume(optical_a, volume_a)
+    volume_b = map_material_volume_to_optical(
+        transparent_opaque_interface().volume, phase0_provisional_mapping()
+    )
+    optical_b = root / "b.zarr"
+    write_volume(optical_b, volume_b)
+    return optical_a, optical_b
+
+
+def test_load_input_swaps_to_new_session_using_current_stage_settings(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "root"
+    optical_a, optical_b = _write_two_inputs(root)
+    initial = StageConfig(
+        render=RenderSettings(width=8, height=8, spp=1, max_depth=11)
+    )
+    core = StageCore(
+        optical_a, tmp_path / "work", preview_size=8, preview_spp=1, initial=initial
+    )
+    first_session = core._session
+
+    stages: list[str] = []
+    session = core.load_input(
+        root, Path("b.zarr"), initial, smoke_spp=1, on_stage=stages.append
+    )
+
+    assert stages == ["validate", "prepare", "load", "smoke", "swap"]
+    assert core.session_generation == 1
+    assert core._session is session
+    assert session is not first_session
+    assert session.optical_zarr == optical_b.resolve()
+    assert session.work_dir == _session_work_dir(tmp_path / "work", 1, optical_b)
+
+    # Current stage/render settings (including max_depth) carried over.
+    pixels, stats, _route = core.render_preview(initial)
+    assert pixels.shape == (8, 8, 3)
+    assert "max_depth=11" in stats
+
+    # A later non-structural change to the new session still traverses.
+    tweaked = replace(
+        initial, key_light=replace(initial.key_light, radiance=(3.0, 2.0, 1.0))
+    )
+    _pixels2, _stats2, route2 = core.render_preview(tweaked)
+    assert route2 == "traverse"
+
+
+def test_load_input_validate_failure_preserves_current_session(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "root"
+    optical_a, _optical_b = _write_two_inputs(root)
+    outside = tmp_path / "outside.zarr"
+    write_volume(
+        outside,
+        map_material_volume_to_optical(
+            transparent_opaque_interface().volume, phase0_provisional_mapping()
+        ),
+    )
+    initial = StageConfig(render=RenderSettings(width=8, height=8, spp=1))
+    core = StageCore(
+        optical_a, tmp_path / "work", preview_size=8, preview_spp=1, initial=initial
+    )
+    original_session = core._session
+
+    stages: list[str] = []
+    with pytest.raises(InputLoadError) as excinfo:
+        core.load_input(root, outside, initial, smoke_spp=1, on_stage=stages.append)
+
+    assert excinfo.value.stage == "validate"
+    assert stages == ["validate"]
+    assert core.session_generation == 0
+    assert core._session is original_session
+
+    pixels, _stats, _route = core.render_preview(initial)
+    assert pixels.shape == (8, 8, 3)
+
+
+def test_load_input_prepare_failure_discards_new_session_and_preserves_current(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "root"
+    optical_a, optical_b = _write_two_inputs(root)
+    initial = StageConfig(render=RenderSettings(width=8, height=8, spp=1))
+    core = StageCore(
+        optical_a, tmp_path / "work", preview_size=8, preview_spp=1, initial=initial
+    )
+    original_session = core._session
+
+    def _boom(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("forced prepare failure")
+
+    monkeypatch.setattr(mitsuba_stage_viewer, "prepare_mitsuba_scene", _boom)
+
+    stages: list[str] = []
+    with pytest.raises(InputLoadError) as excinfo:
+        core.load_input(
+            root, Path("b.zarr"), initial, smoke_spp=1, on_stage=stages.append
+        )
+
+    assert excinfo.value.stage == "prepare"
+    assert stages == ["validate", "prepare"]
+    assert core.session_generation == 0
+    assert core._session is original_session
+    assert not _session_work_dir(tmp_path / "work", 1, optical_b).exists()
+
+
+def test_load_input_load_failure_removes_prepared_work_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "root"
+    optical_a, optical_b = _write_two_inputs(root)
+    initial = StageConfig(render=RenderSettings(width=8, height=8, spp=1))
+    core = StageCore(
+        optical_a, tmp_path / "work", preview_size=8, preview_spp=1, initial=initial
+    )
+    original_session = core._session
+
+    def _boom(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("forced load failure")
+
+    monkeypatch.setattr(mitsuba_stage_viewer, "TraversedPreviewScene", _boom)
+
+    with pytest.raises(InputLoadError) as excinfo:
+        core.load_input(root, Path("b.zarr"), initial, smoke_spp=1)
+
+    assert excinfo.value.stage == "load"
+    assert core.session_generation == 0
+    assert core._session is original_session
+    failed_dir = _session_work_dir(tmp_path / "work", 1, optical_b)
+    assert not failed_dir.exists()
+
+
+def test_load_input_smoke_failure_removes_prepared_work_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "root"
+    optical_a, optical_b = _write_two_inputs(root)
+    initial = StageConfig(render=RenderSettings(width=8, height=8, spp=1))
+    core = StageCore(
+        optical_a, tmp_path / "work", preview_size=8, preview_spp=1, initial=initial
+    )
+    original_session = core._session
+
+    def _boom(self: object, _config: StageConfig, _spp: int) -> None:
+        raise RuntimeError("forced smoke failure")
+
+    monkeypatch.setattr(TraversedPreviewScene, "render", _boom)
+
+    with pytest.raises(InputLoadError) as excinfo:
+        core.load_input(root, Path("b.zarr"), initial, smoke_spp=1)
+
+    assert excinfo.value.stage == "smoke"
+    assert core.session_generation == 0
+    assert core._session is original_session
+    failed_dir = _session_work_dir(tmp_path / "work", 1, optical_b)
+    assert not failed_dir.exists()
 
 
 @pytest.mark.parametrize("max_depth", [8, 16])

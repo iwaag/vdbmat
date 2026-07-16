@@ -53,6 +53,7 @@ import argparse
 import itertools
 import math
 import re
+import shutil
 import sys
 import tempfile
 import threading
@@ -77,6 +78,7 @@ from mitsuba_stage import (
     stage_config_from_json,
     stage_config_to_dict,
 )
+from mitsuba_stage_inputs import resolve_candidate
 
 from vdbmat.core.volumes import OpticalPropertyVolume
 from vdbmat.exporters.mitsuba import MitsubaExportConfig, prepare_mitsuba_scene
@@ -213,6 +215,36 @@ def _session_work_dir(work_dir: Path, seq: int, optical_zarr: Path) -> Path:
     ``preview_scene`` / ``final_scene`` paths.
     """
     return work_dir / _INPUTS_DIRNAME / f"{seq:03d}-{_slug_for(optical_zarr)}"
+
+
+_LOAD_STAGES = ("validate", "prepare", "load", "smoke", "swap")
+
+
+class InputLoadError(Exception):
+    """Load/Rebuild failed at a named stage; the current session is untouched.
+
+    Any failure before the ``swap`` stage discards the half-built session and
+    leaves ``StageCore``'s current session, preview image, and GUI settings
+    exactly as they were.
+    """
+
+    def __init__(self, stage: str, message: str) -> None:
+        assert stage in _LOAD_STAGES
+        super().__init__(f"input load failed at {stage}: {message}")
+        self.stage = stage
+        self.message = message
+
+
+def _discard_session_dir(session_dir: Path) -> None:
+    """Best-effort removal of a session directory abandoned by a failed load."""
+    try:
+        if session_dir.exists():
+            shutil.rmtree(session_dir)
+    except OSError as error:
+        print(
+            f"INPUT LOAD CLEANUP WARNING: could not remove {session_dir}: {error}",
+            file=sys.stderr,
+        )
 
 
 def _nested(mapping: dict[str, object], path: str) -> object:
@@ -520,6 +552,93 @@ class StageCore:
         with path.open("w", encoding="utf-8") as handle:
             json.dump(stage_config_to_dict(config), handle, indent=2)
             handle.write("\n")
+
+    def load_input(
+        self,
+        root: Path,
+        user_path: Path,
+        current_config: StageConfig,
+        smoke_spp: int,
+        *,
+        on_stage: Callable[[str], None] = lambda stage: None,
+    ) -> InputSession:
+        """Validate, build, and smoke-test a new input, then swap it in.
+
+        Runs the five stages the plan fixes as the Load/Rebuild transaction
+        (validate/prepare/load/smoke/swap), reporting each through
+        ``on_stage`` before it runs. ``current_config`` (the GUI's live
+        stage/render settings) drives prepare/load/smoke so a switch keeps
+        the user's current settings and, as a side effect, rejects a new
+        input that is incompatible with them. Any failure before ``swap``
+        raises :class:`InputLoadError` naming the stage, discards the
+        half-built session's work directory, and leaves the current session
+        (and therefore the live preview) untouched. Only ``swap`` mutates
+        ``self``.
+        """
+        on_stage("validate")
+        try:
+            candidate = resolve_candidate(root, user_path)
+            volume = read_volume(candidate.optical_zarr)
+            if not isinstance(volume, OpticalPropertyVolume):
+                raise InputLoadError(
+                    "validate",
+                    f"{candidate.optical_zarr} is not an optical property volume",
+                )
+        except InputLoadError:
+            raise
+        except Exception as error:
+            raise InputLoadError("validate", str(error)) from error
+
+        session_dir = _session_work_dir(
+            self.work_dir, next(self._session_seq), candidate.optical_zarr
+        )
+        seed = MitsubaExportConfig().seed
+
+        on_stage("prepare")
+        try:
+            preview_config = MitsubaExportConfig(
+                width=self.preview_size,
+                height=self.preview_size,
+                spp=self.preview_spp,
+                max_depth=current_config.render.max_depth,
+                variant=self.mi.variant(),
+            )
+            base_preview = prepare_mitsuba_scene(
+                volume, session_dir / "preview_scene", config=preview_config
+            )
+        except Exception as error:
+            _discard_session_dir(session_dir)
+            raise InputLoadError("prepare", str(error)) from error
+
+        on_stage("load")
+        try:
+            preview_initial = _preview_stage_config(
+                current_config, self.preview_size, self.preview_spp
+            )
+            preview_scene = TraversedPreviewScene(
+                self.mi, base_preview, volume.geometry, preview_initial, seed
+            )
+        except Exception as error:
+            _discard_session_dir(session_dir)
+            raise InputLoadError("load", str(error)) from error
+
+        on_stage("smoke")
+        try:
+            preview_scene.render(preview_initial, smoke_spp)
+        except Exception as error:
+            _discard_session_dir(session_dir)
+            raise InputLoadError("smoke", str(error)) from error
+
+        on_stage("swap")
+        session = InputSession(
+            optical_zarr=candidate.optical_zarr,
+            work_dir=session_dir,
+            volume=volume,
+            seed=seed,
+            preview_scene=preview_scene,
+        )
+        self.swap_session(session)
+        return session
 
 
 class RenderWorker(threading.Thread):
