@@ -31,7 +31,7 @@ Invoke on the host (no Docker needed for Mitsuba):
         examples/pipeline_run/demo/mitsuba_stage_demo.py -- \
         OPTICAL_ZARR OUTPUT_PNG [--stage-config PRESET.stage.json] \
         [--width 512] [--height 512] [--spp 128] [--max-depth 8] \
-        [--checker-scale 8]
+        [--checker-scale 8] [--variant llvm_ad_rgb|cuda_ad_rgb] [--seed SEED]
 
 ``OPTICAL_ZARR`` is an ``optical.zarr`` bundle written by ``vdbmat run``.
 ``OUTPUT_PNG`` is where the rendered PNG is written; the exterior/interior PLY
@@ -40,6 +40,24 @@ meshes, ``capabilities.json``, and ``scene-summary.json`` that
 ``<OUTPUT_PNG stem>_scene/``. The script prints ``PIXELSTATS`` (min/max/mean/std of
 the rendered pixels), the same cheap headless regression signal used by the
 Blender demo scripts in this directory.
+
+This script also replays a ``mitsuba_viewer_session`` manifest (see
+:mod:`mitsuba_viewer_session` and :mod:`mitsuba_stage_viewer`) headlessly, using
+the same resolver the viewer uses so the two never disagree about a path,
+digest, or effective config:
+
+    uv run --group mitsuba python \
+        examples/pipeline_run/demo/mitsuba_stage_demo.py -- \
+        --session SESSION.json --input-root ROOT [--preset-root ROOT] \
+        --output-png OUTPUT.png
+
+Session replay resolves the input/preset references and verifies every
+declared digest before rendering; it cannot be combined with the positional
+``OPTICAL_ZARR OUTPUT_PNG`` form, ``--stage-config``, or any of the
+width/height/spp/max-depth/checker-scale overrides, since the manifest is
+already a fully-resolved effective config. An explicit ``--variant``/``--seed``
+is accepted only if it matches the manifest's value, to catch stale command
+lines rather than silently overriding what "session replay" means.
 """
 
 from __future__ import annotations
@@ -51,6 +69,13 @@ from types import ModuleType
 
 import numpy as np
 from mitsuba_stage import StageConfig, apply_stage, stage_config_from_json
+from mitsuba_stage_inputs import resolve_input_root
+from mitsuba_stage_presets import resolve_preset_root
+from mitsuba_viewer_session import (
+    ViewerSessionError,
+    resolve_viewer_session,
+    viewer_session_from_json,
+)
 
 from vdbmat.core.volumes import OpticalPropertyVolume
 from vdbmat.exporters.mitsuba import MitsubaExportConfig, prepare_mitsuba_scene
@@ -62,8 +87,8 @@ def _parse_args() -> argparse.Namespace:
     if "--" in argv:
         argv = argv[argv.index("--") + 1 :]
     parser = argparse.ArgumentParser(prog="mitsuba_stage_demo")
-    parser.add_argument("optical_zarr", type=Path)
-    parser.add_argument("output_png", type=Path)
+    parser.add_argument("optical_zarr", nargs="?", type=Path, default=None)
+    parser.add_argument("output_png", nargs="?", type=Path, default=None)
     parser.add_argument(
         "--stage-config",
         type=Path,
@@ -105,10 +130,87 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--variant",
         choices=("llvm_ad_rgb", "cuda_ad_rgb"),
-        default="llvm_ad_rgb",
-        help="Mitsuba execution backend (default: llvm_ad_rgb, CPU)",
+        default=None,
+        help="Mitsuba execution backend (legacy default: llvm_ad_rgb, CPU; "
+        "with --session must match the manifest if given)",
     )
-    return parser.parse_args(argv)
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="legacy default: MitsubaExportConfig().seed; with --session must "
+        "match the manifest if given",
+    )
+    parser.add_argument(
+        "--session",
+        type=Path,
+        default=None,
+        help="replay a viewer-session manifest instead of the legacy "
+        "positional/override form",
+    )
+    parser.add_argument(
+        "--input-root",
+        type=Path,
+        default=None,
+        help="server-local root the session's input path resolves against "
+        "(required with --session)",
+    )
+    parser.add_argument(
+        "--preset-root",
+        type=Path,
+        default=None,
+        help="server-local root the session's optional preset provenance "
+        "resolves against (required if the session records one)",
+    )
+    parser.add_argument(
+        "--output-png",
+        dest="session_output_png",
+        type=Path,
+        default=None,
+        help="output PNG path for --session replay",
+    )
+    args = parser.parse_args(argv)
+
+    if args.seed is not None and args.seed < 0:
+        parser.error("--seed must be >= 0")
+
+    if args.session is None:
+        if args.optical_zarr is None or args.output_png is None:
+            parser.error("OPTICAL_ZARR OUTPUT_PNG are required without --session")
+        if (
+            args.input_root is not None
+            or args.preset_root is not None
+            or args.session_output_png is not None
+        ):
+            parser.error(
+                "--input-root/--preset-root/--output-png require --session"
+            )
+    else:
+        if args.optical_zarr is not None or args.output_png is not None:
+            parser.error(
+                "positional OPTICAL_ZARR/OUTPUT_PNG cannot be used with --session"
+            )
+        if args.input_root is None:
+            parser.error("--input-root is required with --session")
+        if args.session_output_png is None:
+            parser.error("--output-png is required with --session")
+        if args.stage_config is not None:
+            parser.error("--stage-config cannot be used with --session")
+        if any(
+            value is not None
+            for value in (
+                args.width,
+                args.height,
+                args.spp,
+                args.max_depth,
+                args.checker_scale,
+            )
+        ):
+            parser.error(
+                "--width/--height/--spp/--max-depth/--checker-scale cannot be "
+                "used with --session"
+            )
+    return args
 
 
 def _load_mitsuba(variant: str) -> ModuleType:
@@ -120,8 +222,59 @@ def _load_mitsuba(variant: str) -> ModuleType:
     return mi
 
 
-def main() -> None:
-    args = _parse_args()
+def render_stage(
+    optical_zarr: Path,
+    output_png: Path,
+    stage: StageConfig,
+    variant: str,
+    seed: int,
+) -> np.ndarray:
+    """Render one optical volume through a resolved stage; write and log it.
+
+    Shared by the legacy CLI form and ``--session`` replay so the two never
+    diverge in how a resolved (``optical_zarr``, ``stage``, ``variant``,
+    ``seed``) tuple becomes pixels.
+    """
+    volume = read_volume(optical_zarr)
+    if not isinstance(volume, OpticalPropertyVolume):
+        raise SystemExit(f"{optical_zarr} is not an optical property volume")
+
+    config = MitsubaExportConfig(
+        width=stage.render.width,
+        height=stage.render.height,
+        spp=stage.render.spp,
+        max_depth=stage.render.max_depth,
+        variant=variant,
+        seed=seed,
+    )
+    scene_dir = output_png.parent / f"{output_png.stem}_scene"
+    prepared = prepare_mitsuba_scene(volume, scene_dir, config=config)
+
+    mi = _load_mitsuba(config.variant)
+    scene_dict = dict(prepared.scene_dict)
+    apply_stage(mi, scene_dict, volume.geometry, stage)
+
+    scene = mi.load_dict(scene_dict)
+    image = mi.render(scene, seed=config.seed, spp=config.spp)
+
+    output_png.parent.mkdir(parents=True, exist_ok=True)
+    mi.util.write_bitmap(str(output_png), image, write_async=False)
+
+    pixels = np.asarray(image, dtype=np.float32)
+    print(
+        f"PIXELSTATS variant={config.variant} seed={config.seed} "
+        f"max_depth={config.max_depth} "
+        f"min={float(np.min(pixels)):.6g} "
+        f"max={float(np.max(pixels)):.6g} "
+        f"mean={float(np.mean(pixels)):.6g} "
+        f"std={float(np.std(pixels)):.6g}"
+    )
+    return pixels
+
+
+def _resolve_legacy(
+    args: argparse.Namespace,
+) -> tuple[Path, Path, StageConfig, str, int]:
     if args.stage_config is not None:
         stage = stage_config_from_json(args.stage_config)
     else:
@@ -133,39 +286,58 @@ def main() -> None:
         max_depth=args.max_depth,
         checker_scale=args.checker_scale,
     )
+    variant = args.variant or "llvm_ad_rgb"
+    seed = MitsubaExportConfig().seed if args.seed is None else args.seed
+    assert args.optical_zarr is not None
+    assert args.output_png is not None
+    return args.optical_zarr, args.output_png, stage, variant, seed
 
-    volume = read_volume(args.optical_zarr)
-    if not isinstance(volume, OpticalPropertyVolume):
-        raise SystemExit(f"{args.optical_zarr} is not an optical property volume")
 
-    config = MitsubaExportConfig(
-        width=stage.render.width,
-        height=stage.render.height,
-        spp=stage.render.spp,
-        max_depth=stage.render.max_depth,
-        variant=args.variant,
+def _resolve_session(
+    args: argparse.Namespace,
+) -> tuple[Path, Path, StageConfig, str, int]:
+    assert args.session is not None
+    assert args.input_root is not None
+    assert args.session_output_png is not None
+    session = viewer_session_from_json(args.session)
+    input_root = resolve_input_root(args.input_root, args.input_root)
+    preset_root = resolve_preset_root(args.preset_root, None)
+    if session.preset is not None and args.preset_root is None:
+        raise ViewerSessionError(
+            "resolve", "stage preset reference requires --preset-root"
+        )
+    resolved = resolve_viewer_session(session, input_root, preset_root)
+    if args.variant is not None and args.variant != resolved.variant:
+        raise ViewerSessionError(
+            "resolve",
+            f"--variant {args.variant} does not match session variant "
+            f"{resolved.variant}",
+        )
+    if args.seed is not None and args.seed != resolved.seed:
+        raise ViewerSessionError(
+            "resolve", f"--seed {args.seed} does not match session seed {resolved.seed}"
+        )
+    return (
+        resolved.optical_zarr,
+        args.session_output_png,
+        resolved.stage_config,
+        resolved.variant,
+        resolved.seed,
     )
-    scene_dir = args.output_png.parent / f"{args.output_png.stem}_scene"
-    prepared = prepare_mitsuba_scene(volume, scene_dir, config=config)
 
-    mi = _load_mitsuba(config.variant)
-    scene_dict = dict(prepared.scene_dict)
-    apply_stage(mi, scene_dict, volume.geometry, stage)
 
-    scene = mi.load_dict(scene_dict)
-    image = mi.render(scene, seed=config.seed, spp=config.spp)
-
-    args.output_png.parent.mkdir(parents=True, exist_ok=True)
-    mi.util.write_bitmap(str(args.output_png), image, write_async=False)
-
-    pixels = np.asarray(image, dtype=np.float32)
-    print(
-        f"PIXELSTATS max_depth={config.max_depth} "
-        f"min={float(np.min(pixels)):.6g} "
-        f"max={float(np.max(pixels)):.6g} "
-        f"mean={float(np.mean(pixels)):.6g} "
-        f"std={float(np.std(pixels)):.6g}"
-    )
+def main() -> None:
+    args = _parse_args()
+    if args.session is None:
+        optical_zarr, output_png, stage, variant, seed = _resolve_legacy(args)
+    else:
+        try:
+            optical_zarr, output_png, stage, variant, seed = _resolve_session(args)
+        except ViewerSessionError as error:
+            raise SystemExit(
+                f"session replay failed at {error.stage}: {error.message}"
+            ) from error
+    render_stage(optical_zarr, output_png, stage, variant, seed)
 
 
 if __name__ == "__main__":

@@ -474,6 +474,47 @@ def test_viewer_session_load_verifies_then_commits_input_config_and_seed(
     assert summary["render"]["seed"] == 91
 
 
+def test_viewer_app_session_startup_builds_core_from_resolved_input(
+    tmp_path: Path,
+) -> None:
+    """``ViewerApp(--session ...)`` must load the session's input, not None.
+
+    Regression test: the constructor used to pass the CLI's raw
+    ``args.optical_zarr`` (always ``None`` in session mode, since the
+    positional argument is forbidden alongside ``--session``) to
+    ``StageCore`` instead of the already-resolved ``startup.initial_input``,
+    crashing with a ``TypeError`` before any GUI wiring happened.
+    """
+    root = tmp_path / "root"
+    optical_a, _optical_b = _write_two_inputs(root)
+    stage = StageConfig(render=RenderSettings(width=8, height=8, spp=1))
+    session = create_viewer_session(
+        resolve_candidate(root, Path("a.zarr")), stage, "llvm_ad_rgb", 5
+    )
+    session_path = tmp_path / "startup.session.json"
+    write_viewer_session(session_path, session)
+
+    args = mitsuba_stage_viewer._parse_args(
+        [
+            "--session",
+            str(session_path),
+            "--input-root",
+            str(root),
+            "--port",
+            "0",
+            "--work-dir",
+            str(tmp_path / "work"),
+        ]
+    )
+    app = mitsuba_stage_viewer.ViewerApp(args)
+    try:
+        assert app.core.current_session.optical_zarr == optical_a.resolve()
+        assert app.core.current_session.seed == 5
+        assert app._current_selection == "a.zarr"
+    finally:
+        app.server.stop()
+
+
 def test_load_input_rejects_invalid_candidates_without_changing_live_preview(
     tmp_path: Path,
 ) -> None:
@@ -732,4 +773,63 @@ def test_saved_preset_viewer_final_matches_headless_replay(
 
     assert np.array_equal(viewer_pixels, headless_pixels)
     assert headless_summary["render"]["max_depth"] == max_depth
-    assert f"PIXELSTATS max_depth={max_depth}" in capsys.readouterr().out
+    assert f"max_depth={max_depth}" in capsys.readouterr().out
+
+
+def test_saved_session_viewer_final_matches_headless_session_replay(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    root = tmp_path / "root"
+    optical_a, _optical_b = _write_two_inputs(root)
+    stage = StageConfig(
+        render=RenderSettings(width=12, height=12, spp=2, max_depth=17),
+        camera=CameraOverride(azimuth_deg=-12.0),
+    )
+    seed = 4242
+    session = create_viewer_session(
+        resolve_candidate(root, Path("a.zarr")), stage, "llvm_ad_rgb", seed
+    )
+    session_path = tmp_path / "saved.session.json"
+    write_viewer_session(session_path, session)
+
+    viewer_png = tmp_path / "viewer.png"
+    core = StageCore(
+        optical_a,
+        tmp_path / "viewer-work",
+        preview_size=12,
+        preview_spp=1,
+        initial=stage,
+        seed=seed,
+    )
+    core.render_final(stage, viewer_png)
+
+    headless_png = tmp_path / "headless.png"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "mitsuba_stage_demo",
+            "--session",
+            str(session_path),
+            "--input-root",
+            str(root),
+            "--output-png",
+            str(headless_png),
+        ],
+    )
+    mitsuba_stage_demo.main()
+
+    viewer_pixels = np.asarray(mi.Bitmap(str(viewer_png)))
+    headless_pixels = np.asarray(mi.Bitmap(str(headless_png)))
+    headless_summary = json.loads(
+        (tmp_path / "headless_scene/scene-summary.json").read_text(encoding="utf-8")
+    )
+
+    assert np.array_equal(viewer_pixels, headless_pixels)
+    assert headless_summary["render"]["max_depth"] == 17
+    assert headless_summary["render"]["seed"] == seed
+    out = capsys.readouterr().out
+    assert f"seed={seed}" in out
+    assert "max_depth=17" in out

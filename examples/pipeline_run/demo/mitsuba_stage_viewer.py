@@ -1544,7 +1544,7 @@ class ViewerApp:
             self._current_selection = self._initial_sentinel
 
         self.core = StageCore(
-            _resolve_initial_optical_zarr(args.optical_zarr),
+            _resolve_initial_optical_zarr(startup.initial_input),
             work_dir,
             preview_size=args.preview_size,
             preview_spp=args.preview_spp,

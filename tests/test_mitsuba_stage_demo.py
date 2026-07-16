@@ -31,6 +31,288 @@ def test_parse_args_accepts_max_depth(monkeypatch: pytest.MonkeyPatch) -> None:
     assert args.max_depth == 14
 
 
+def test_parse_args_accepts_seed_in_legacy_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["mitsuba_stage_demo", "input.zarr", "output.png", "--seed", "7"],
+    )
+
+    args = mitsuba_stage_demo._parse_args()
+
+    assert args.seed == 7
+
+
+def test_parse_args_rejects_negative_seed(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["mitsuba_stage_demo", "input.zarr", "output.png", "--seed", "-1"],
+    )
+
+    with pytest.raises(SystemExit):
+        mitsuba_stage_demo._parse_args()
+
+
+def test_parse_args_session_mode_requires_input_root(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "mitsuba_stage_demo",
+            "--session",
+            "s.json",
+            "--output-png",
+            "out.png",
+        ],
+    )
+
+    with pytest.raises(SystemExit):
+        mitsuba_stage_demo._parse_args()
+
+
+def test_parse_args_session_mode_requires_output_png(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "mitsuba_stage_demo",
+            "--session",
+            "s.json",
+            "--input-root",
+            "root",
+        ],
+    )
+
+    with pytest.raises(SystemExit):
+        mitsuba_stage_demo._parse_args()
+
+
+def test_parse_args_session_mode_rejects_positional_form(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "mitsuba_stage_demo",
+            "input.zarr",
+            "output.png",
+            "--session",
+            "s.json",
+            "--input-root",
+            "root",
+            "--output-png",
+            "out.png",
+        ],
+    )
+
+    with pytest.raises(SystemExit):
+        mitsuba_stage_demo._parse_args()
+
+
+def test_parse_args_session_mode_rejects_stage_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "mitsuba_stage_demo",
+            "--session",
+            "s.json",
+            "--input-root",
+            "root",
+            "--output-png",
+            "out.png",
+            "--stage-config",
+            "preset.stage.json",
+        ],
+    )
+
+    with pytest.raises(SystemExit):
+        mitsuba_stage_demo._parse_args()
+
+
+@pytest.mark.parametrize(
+    "flag", ["--width", "--height", "--spp", "--max-depth", "--checker-scale"]
+)
+def test_parse_args_session_mode_rejects_render_overrides(
+    monkeypatch: pytest.MonkeyPatch, flag: str
+) -> None:
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "mitsuba_stage_demo",
+            "--session",
+            "s.json",
+            "--input-root",
+            "root",
+            "--output-png",
+            "out.png",
+            flag,
+            "4",
+        ],
+    )
+
+    with pytest.raises(SystemExit):
+        mitsuba_stage_demo._parse_args()
+
+
+def test_parse_args_legacy_mode_rejects_session_only_flags(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "mitsuba_stage_demo",
+            "input.zarr",
+            "output.png",
+            "--input-root",
+            "root",
+        ],
+    )
+
+    with pytest.raises(SystemExit):
+        mitsuba_stage_demo._parse_args()
+
+
+def test_main_session_mode_replays_resolved_session(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from mitsuba_stage import StageConfig
+
+    args = argparse.Namespace(
+        optical_zarr=None,
+        output_png=None,
+        stage_config=None,
+        width=None,
+        height=None,
+        spp=None,
+        max_depth=None,
+        checker_scale=None,
+        variant=None,
+        seed=None,
+        session=tmp_path / "viewer.session.json",
+        input_root=tmp_path / "inputs",
+        preset_root=None,
+        session_output_png=tmp_path / "replay.png",
+    )
+    stage = StageConfig()
+    resolved = SimpleNamespace(
+        optical_zarr=tmp_path / "inputs" / "case" / "optical.zarr",
+        stage_config=stage,
+        variant="llvm_ad_rgb",
+        seed=42,
+    )
+    captured: dict[str, Any] = {}
+
+    def fake_render_stage(
+        optical_zarr: Path,
+        output_png: Path,
+        stage_config: object,
+        variant: str,
+        seed: int,
+    ) -> np.ndarray:
+        captured["optical_zarr"] = optical_zarr
+        captured["output_png"] = output_png
+        captured["stage_config"] = stage_config
+        captured["variant"] = variant
+        captured["seed"] = seed
+        return np.zeros((1, 1, 3), dtype=np.float32)
+
+    monkeypatch.setattr(mitsuba_stage_demo, "_parse_args", lambda: args)
+    monkeypatch.setattr(
+        mitsuba_stage_demo,
+        "viewer_session_from_json",
+        lambda _path: SimpleNamespace(preset=None),
+    )
+    monkeypatch.setattr(
+        mitsuba_stage_demo,
+        "resolve_input_root",
+        lambda _cli, _initial: tmp_path / "inputs",
+    )
+    monkeypatch.setattr(
+        mitsuba_stage_demo,
+        "resolve_preset_root",
+        lambda _cli, _initial: tmp_path / "presets",
+    )
+    monkeypatch.setattr(
+        mitsuba_stage_demo, "resolve_viewer_session", lambda *_a, **_k: resolved
+    )
+    monkeypatch.setattr(mitsuba_stage_demo, "render_stage", fake_render_stage)
+
+    mitsuba_stage_demo.main()
+
+    assert captured["optical_zarr"] == resolved.optical_zarr
+    assert captured["output_png"] == args.session_output_png
+    assert captured["stage_config"] is stage
+    assert captured["variant"] == "llvm_ad_rgb"
+    assert captured["seed"] == 42
+
+
+def test_main_session_mode_rejects_variant_mismatch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from mitsuba_stage import StageConfig
+
+    args = argparse.Namespace(
+        optical_zarr=None,
+        output_png=None,
+        stage_config=None,
+        width=None,
+        height=None,
+        spp=None,
+        max_depth=None,
+        checker_scale=None,
+        variant="cuda_ad_rgb",
+        seed=None,
+        session=tmp_path / "viewer.session.json",
+        input_root=tmp_path / "inputs",
+        preset_root=None,
+        session_output_png=tmp_path / "replay.png",
+    )
+    resolved = SimpleNamespace(
+        optical_zarr=tmp_path / "inputs" / "case" / "optical.zarr",
+        stage_config=StageConfig(),
+        variant="llvm_ad_rgb",
+        seed=42,
+    )
+
+    monkeypatch.setattr(mitsuba_stage_demo, "_parse_args", lambda: args)
+    monkeypatch.setattr(
+        mitsuba_stage_demo,
+        "viewer_session_from_json",
+        lambda _path: SimpleNamespace(preset=None),
+    )
+    monkeypatch.setattr(
+        mitsuba_stage_demo,
+        "resolve_input_root",
+        lambda _cli, _initial: tmp_path / "inputs",
+    )
+    monkeypatch.setattr(
+        mitsuba_stage_demo,
+        "resolve_preset_root",
+        lambda _cli, _initial: tmp_path / "presets",
+    )
+    monkeypatch.setattr(
+        mitsuba_stage_demo, "resolve_viewer_session", lambda *_a, **_k: resolved
+    )
+
+    with pytest.raises(SystemExit, match="does not match session variant"):
+        mitsuba_stage_demo.main()
+
+
 @pytest.mark.parametrize(
     ("version", "render", "cli_max_depth", "expected"),
     [
@@ -70,6 +352,11 @@ def test_main_propagates_effective_max_depth_to_export_and_log(
         max_depth=cli_max_depth,
         checker_scale=None,
         variant="llvm_ad_rgb",
+        seed=None,
+        session=None,
+        input_root=None,
+        preset_root=None,
+        session_output_png=None,
     )
     volume = map_material_volume_to_optical(
         homogeneous_transparent().volume, phase0_provisional_mapping()
@@ -112,4 +399,4 @@ def test_main_propagates_effective_max_depth_to_export_and_log(
     config = captured["config"]
     assert config.max_depth == expected
     assert captured["output"] == tmp_path / "render_scene"
-    assert f"PIXELSTATS max_depth={expected}" in capsys.readouterr().out
+    assert f"max_depth={expected}" in capsys.readouterr().out
