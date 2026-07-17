@@ -30,6 +30,7 @@ from vdbmat.pipeline import PipelineConfig, run_pipeline, zarr_store_sha256
 DEMO_DIR = Path(__file__).parents[2] / "examples" / "pipeline_run" / "demo"
 sys.path.insert(0, str(DEMO_DIR))
 
+import mitsuba_stage_core  # noqa: E402
 import mitsuba_stage_demo  # noqa: E402
 import mitsuba_stage_viewer  # noqa: E402
 from mitsuba_stage import (  # noqa: E402
@@ -40,6 +41,13 @@ from mitsuba_stage import (  # noqa: E402
     apply_stage,
     stage_config_to_dict,
 )
+from mitsuba_stage_core import (  # noqa: E402
+    InputLoadError,
+    InputSession,
+    StageCore,
+    TraversedPreviewScene,
+    _session_work_dir,
+)
 from mitsuba_stage_inputs import (  # noqa: E402
     InputCandidate,
     InputKind,
@@ -48,13 +56,6 @@ from mitsuba_stage_inputs import (  # noqa: E402
 from mitsuba_stage_mappings import resolve_mapping_candidate  # noqa: E402
 from mitsuba_stage_presets import load_preset, resolve_preset  # noqa: E402
 from mitsuba_stage_regen import RegenError, regenerate_optical  # noqa: E402
-from mitsuba_stage_viewer import (  # noqa: E402
-    InputLoadError,
-    InputSession,
-    StageCore,
-    TraversedPreviewScene,
-    _session_work_dir,
-)
 from mitsuba_viewer_session import (  # noqa: E402
     SessionMappingRef,
     ViewerSessionError,
@@ -823,7 +824,7 @@ def test_load_input_prepare_failure_discards_new_session_and_preserves_current(
     def _boom(*_args: object, **_kwargs: object) -> None:
         raise RuntimeError("forced prepare failure")
 
-    monkeypatch.setattr(mitsuba_stage_viewer, "prepare_mitsuba_scene", _boom)
+    monkeypatch.setattr(mitsuba_stage_core, "prepare_mitsuba_scene", _boom)
 
     stages: list[str] = []
     with pytest.raises(InputLoadError) as excinfo:
@@ -852,7 +853,7 @@ def test_load_input_load_failure_removes_prepared_work_dir(
     def _boom(*_args: object, **_kwargs: object) -> None:
         raise RuntimeError("forced load failure")
 
-    monkeypatch.setattr(mitsuba_stage_viewer, "TraversedPreviewScene", _boom)
+    monkeypatch.setattr(mitsuba_stage_core, "TraversedPreviewScene", _boom)
 
     with pytest.raises(InputLoadError) as excinfo:
         core.load_input(root, Path("b.zarr"), initial, smoke_spp=1)

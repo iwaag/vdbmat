@@ -38,7 +38,7 @@ sys.path.insert(0, str(DEMO_DIR))
 import mitsuba_stage_demo  # noqa: E402
 import mitsuba_stage_viewer  # noqa: E402
 from mitsuba_stage import RenderSettings, StageConfig  # noqa: E402
-from mitsuba_stage_viewer import InputLoadError, StageCore  # noqa: E402
+from mitsuba_stage_core import InputLoadError, StageCore  # noqa: E402
 
 mi = pytest.importorskip("mitsuba")
 
