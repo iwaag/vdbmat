@@ -332,9 +332,7 @@ def test_create_and_resolve_standalone_session(tmp_path: Path) -> None:
     candidate = resolve_candidate(input_root, Path("model.zarr"))
     config = StageConfig(render=RenderSettings(max_depth=14))
 
-    session = create_viewer_session(
-        candidate, config, "llvm_ad_rgb", 99
-    )
+    session = create_viewer_session(candidate, config, "llvm_ad_rgb", 99)
     resolved = resolve_viewer_session(session, input_root)
 
     assert resolved.input_candidate == candidate
@@ -345,15 +343,92 @@ def test_create_and_resolve_standalone_session(tmp_path: Path) -> None:
     assert resolved.preset_candidate is None
 
 
+def test_create_viewer_session_uses_precomputed_optical_digest(
+    tmp_path: Path,
+) -> None:
+    """A precomputed digest is trusted as-is, not re-hashed from disk.
+
+    Phase 5 Step 3: callers with a session-scoped digest cache
+    (``InputSession.cached_digest``) pass their cached value through
+    instead of paying for another full-store hash. This is the contract
+    that makes that safe to trust: whatever the caller supplies wins.
+    """
+    input_root = tmp_path / "inputs"
+    input_root.mkdir()
+    _write_optical(input_root / "model.zarr")
+    candidate = resolve_candidate(input_root, Path("model.zarr"))
+
+    session = create_viewer_session(
+        candidate, StageConfig(), "llvm_ad_rgb", 1, optical_digest=_DIGEST_A
+    )
+
+    assert session.input.optical_sha256 == _DIGEST_A
+
+
+def test_create_viewer_session_uses_precomputed_run_manifest_digest(
+    tmp_path: Path,
+) -> None:
+    input_root = tmp_path / "inputs"
+    input_root.mkdir()
+    _write_bundle(input_root / "bundle")
+    candidate = resolve_candidate(input_root, Path("bundle"))
+    actual_optical_digest = zarr_store_sha256(candidate.optical_zarr)
+
+    session = create_viewer_session(
+        candidate,
+        StageConfig(),
+        "llvm_ad_rgb",
+        1,
+        optical_digest=actual_optical_digest,
+        run_manifest_digest=_DIGEST_B,
+    )
+
+    assert session.input.run_manifest_sha256 == _DIGEST_B
+
+
+def test_create_viewer_session_ignores_run_manifest_digest_for_non_bundle(
+    tmp_path: Path,
+) -> None:
+    """``run_manifest_digest`` only applies to a run-bundle candidate."""
+    input_root = tmp_path / "inputs"
+    input_root.mkdir()
+    _write_optical(input_root / "model.zarr")
+    candidate = resolve_candidate(input_root, Path("model.zarr"))
+    actual_optical_digest = zarr_store_sha256(candidate.optical_zarr)
+
+    session = create_viewer_session(
+        candidate,
+        StageConfig(),
+        "llvm_ad_rgb",
+        1,
+        optical_digest=actual_optical_digest,
+        run_manifest_digest=_DIGEST_B,
+    )
+
+    assert session.input.run_manifest_sha256 is None
+
+
+def test_create_viewer_session_without_precomputed_digests_hashes_as_before(
+    tmp_path: Path,
+) -> None:
+    """Omitting the new kwargs preserves the original re-hashing behaviour."""
+    input_root = tmp_path / "inputs"
+    input_root.mkdir()
+    _write_optical(input_root / "model.zarr")
+    candidate = resolve_candidate(input_root, Path("model.zarr"))
+
+    session = create_viewer_session(candidate, StageConfig(), "llvm_ad_rgb", 1)
+
+    assert session.input.optical_sha256 == zarr_store_sha256(candidate.optical_zarr)
+
+
 def test_create_and_resolve_bundle_session(tmp_path: Path) -> None:
     input_root = tmp_path / "inputs"
     input_root.mkdir()
     _write_bundle(input_root / "bundle")
     candidate = resolve_candidate(input_root, Path("bundle"))
 
-    session = create_viewer_session(
-        candidate, StageConfig(), "cuda_ad_rgb", 0
-    )
+    session = create_viewer_session(candidate, StageConfig(), "cuda_ad_rgb", 0)
     document = viewer_session_to_dict(session)
     resolved = resolve_viewer_session(session, input_root)
 
@@ -368,9 +443,7 @@ def test_resolver_rejects_modified_optical_store(tmp_path: Path) -> None:
     input_root.mkdir()
     _write_optical(input_root / "model.zarr")
     candidate = resolve_candidate(input_root, Path("model.zarr"))
-    session = create_viewer_session(
-        candidate, StageConfig(), "llvm_ad_rgb", 1
-    )
+    session = create_viewer_session(candidate, StageConfig(), "llvm_ad_rgb", 1)
     (candidate.optical_zarr / "changed-marker").write_text("changed")
 
     with pytest.raises(ViewerSessionError, match="input optical digest mismatch"):
@@ -382,9 +455,7 @@ def test_resolver_rejects_modified_run_manifest(tmp_path: Path) -> None:
     input_root.mkdir()
     _write_bundle(input_root / "bundle")
     candidate = resolve_candidate(input_root, Path("bundle"))
-    session = create_viewer_session(
-        candidate, StageConfig(), "llvm_ad_rgb", 1
-    )
+    session = create_viewer_session(candidate, StageConfig(), "llvm_ad_rgb", 1)
     (candidate.path / "run.json").write_text("{}", encoding="utf-8")
 
     with pytest.raises(ViewerSessionError, match="run manifest digest mismatch"):

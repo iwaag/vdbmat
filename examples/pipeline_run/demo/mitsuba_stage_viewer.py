@@ -69,7 +69,7 @@ import threading
 import time
 import traceback
 from collections.abc import Callable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from types import ModuleType
 
@@ -118,6 +118,7 @@ from mitsuba_stage_regen import RegenError, regenerate_optical
 from mitsuba_viewer_session import (
     SessionMappingRef,
     SessionPresetRef,
+    ViewerSession,
     ViewerSessionError,
     create_viewer_session,
     resolve_viewer_session,
@@ -129,7 +130,7 @@ from mitsuba_viewer_session import (
 from vdbmat.core.volumes import OpticalPropertyVolume
 from vdbmat.exporters.mitsuba import MitsubaExportConfig, prepare_mitsuba_scene
 from vdbmat.io.zarr import read_volume
-from vdbmat.pipeline import zarr_store_sha256
+from vdbmat.pipeline import sha256_file, zarr_store_sha256
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -286,6 +287,7 @@ class SessionDerivation:
     mapping_candidate: MappingCandidate
     mapping_digest: str
     derived_bundle: Path
+    reused: bool = False
 
 
 def _require_disjoint_roots(a: Path, b: Path, *, label: str) -> None:
@@ -429,6 +431,7 @@ def _resolve_viewer_startup(args: argparse.Namespace, work_dir: Path) -> ViewerS
             mapping_candidate=resolved.mapping_candidate,
             mapping_digest=resolved.session.mapping.digest,
             derived_bundle=derived.bundle_path,
+            reused=derived.reused,
         )
 
     return ViewerStartup(
@@ -800,6 +803,44 @@ class InputSession:
     base_final: object | None = None
     final_key: FinalRenderKey | None = None
     derivation: SessionDerivation | None = None
+    _digest_cache: dict[Path, str] = field(default_factory=dict)
+
+    def cached_digest(self, path: Path, compute: Callable[[Path], str]) -> str:
+        """Return ``compute(path)``, computed once per resolved path and reused.
+
+        Digests (a full store/file hash) are expensive; Save session, the
+        final-render sidecar, and Verify digests all want "the digest of
+        this store for the currently live session" without re-hashing it
+        every time they're invoked. The cache is scoped to this
+        :class:`InputSession` and is simply dropped when the session is
+        replaced by a swap.
+        """
+        resolved = Path(path).resolve()
+        cached = self._digest_cache.get(resolved)
+        if cached is not None:
+            return cached
+        value = compute(resolved)
+        self._digest_cache[resolved] = value
+        return value
+
+    def peek_digest(self, path: Path) -> str | None:
+        """Return the cached digest for ``path`` without computing it."""
+        return self._digest_cache.get(Path(path).resolve())
+
+    def refresh_digest(
+        self, path: Path, compute: Callable[[Path], str]
+    ) -> tuple[str, bool]:
+        """Unconditionally re-hash ``path``; return ``(digest, drifted)``.
+
+        ``drifted`` is true only when a previously cached digest for this
+        path exists and disagrees with the freshly computed one. The cache
+        is updated to the fresh value either way (used by Verify digests).
+        """
+        resolved = Path(path).resolve()
+        fresh = compute(resolved)
+        previous = self._digest_cache.get(resolved)
+        self._digest_cache[resolved] = fresh
+        return fresh, previous is not None and previous != fresh
 
 
 class StageCore:
@@ -1846,6 +1887,7 @@ class ViewerApp:
             input_tab=self._build_input_tab,
             preset_tab=self._build_preset_tab,
         )
+        self._update_effective_state()
 
         preset_default = args.preset_out or (work_dir / "viewer.stage.json")
         final_default = args.final_out or (work_dir / "final.png")
@@ -1879,6 +1921,7 @@ class ViewerApp:
 
     def _on_stage_change(self) -> None:
         self.applied_preset = None
+        self._update_effective_state()
         self._schedule_preview()
 
     def _schedule_preview(self) -> None:
@@ -1929,7 +1972,14 @@ class ViewerApp:
         self.status.content = f"preset saved: {path}"
         print(f"PRESET saved {path}")
 
-    def _capture_session(self, path: Path) -> None:
+    def _build_current_session_document(self) -> ViewerSession:
+        """Verify and capture the live session as a ``vdbmat.viewer-session`` doc.
+
+        Shared by Save session and the final-render sidecar (Step 3) so both
+        reject exactly the same conditions and reuse the same digest cache.
+        Digests come from the current :class:`InputSession`'s cache,
+        computed (and cached) on first use here.
+        """
         selection = self._current_selection
         if selection == self._initial_sentinel:
             raise ViewerSessionError("capture", "current input is outside --input-root")
@@ -1964,7 +2014,9 @@ class ViewerApp:
                     "Load/Rebuild again before saving",
                 )
             try:
-                derived_digest = zarr_store_sha256(live_session.optical_zarr)
+                derived_digest = live_session.cached_digest(
+                    live_session.optical_zarr, zarr_store_sha256
+                )
             except OSError as error:
                 raise ViewerSessionError(
                     "capture", f"cannot digest derived optical store: {error}"
@@ -1974,14 +2026,34 @@ class ViewerApp:
                 digest=current_mapping_digest,
                 derived_optical_sha256=derived_digest,
             )
-        session = create_viewer_session(
+        try:
+            input_digest = live_session.cached_digest(
+                candidate.optical_zarr, zarr_store_sha256
+            )
+            run_digest = (
+                live_session.cached_digest(
+                    candidate.path / _RUN_MANIFEST_NAME, sha256_file
+                )
+                if candidate.kind is InputKind.RUN_BUNDLE
+                else None
+            )
+        except OSError as error:
+            raise ViewerSessionError(
+                "capture", f"cannot digest input: {error}"
+            ) from error
+        return create_viewer_session(
             candidate,
             self.binder.current(),
             self.core.mi.variant(),
             live_session.seed,
             preset=self.applied_preset,
             mapping=mapping_ref,
+            optical_digest=input_digest,
+            run_manifest_digest=run_digest,
         )
+
+    def _capture_session(self, path: Path) -> None:
+        session = self._build_current_session_document()
         write_viewer_session(path, session)
 
     def _queue_save_session(self) -> None:
@@ -2064,6 +2136,7 @@ class ViewerApp:
                 mapping_candidate=resolved.mapping_candidate,
                 mapping_digest=resolved.session.mapping.digest,
                 derived_bundle=derived.bundle_path,
+                reused=derived.reused,
             )
             prepared.derivation = derivation
         else:
@@ -2146,11 +2219,37 @@ class ViewerApp:
                 self._update_input_summary()
                 self._update_preset_summary()
                 self._update_mapping_summary()
+                self._update_effective_state()
                 self._schedule_preview()
             finally:
                 self.session_load_button.disabled = False
 
         self.worker.submit(job)
+
+    def _final_sidecar_path(self, output_png: Path) -> Path:
+        return output_png.with_name(f"{output_png.stem}.session.json")
+
+    def _write_final_sidecar(self, output_png: Path) -> str | None:
+        """Write ``<basename>.session.json`` next to a successful final render.
+
+        Reuses :meth:`_build_current_session_document` (the same
+        construction/validation Save session uses — no new schema) so the
+        sidecar is a plain ``vdbmat.viewer-session`` document that
+        ``mitsuba_stage_demo.py --session`` can replay directly. A render
+        that cannot currently produce a valid session document (initial
+        sentinel input, stale mapping — the same conditions Save session
+        already rejects) is not a render failure: the PNG is kept and only
+        the sidecar is skipped, with the reason surfaced in the status line.
+        """
+        try:
+            document = self._build_current_session_document()
+        except ViewerSessionError as error:
+            print(f"FINAL SIDECAR SKIPPED {error}", file=sys.stderr)
+            return f"final: session sidecar skipped: {error}"
+        sidecar_path = self._final_sidecar_path(output_png)
+        write_viewer_session(sidecar_path, document)
+        print(f"FINAL SIDECAR {sidecar_path}")
+        return None
 
     def _queue_final(self) -> None:
         config = self.binder.current()
@@ -2162,7 +2261,11 @@ class ViewerApp:
             timer.advance("render")
             stats = self.core.render_final(config, path)
             elapsed = timer.finish()
-            self.status.content = f"final {elapsed:.1f}s → {path} — PIXELSTATS {stats}"
+            sidecar_note = self._write_final_sidecar(path)
+            status = f"final {elapsed:.1f}s → {path} — PIXELSTATS {stats}"
+            if sidecar_note is not None:
+                status = f"{status}\n{sidecar_note}"
+            self.status.content = status
             print(f"FINAL {path} PIXELSTATS {stats}")
 
         self.worker.submit(job)
@@ -2260,6 +2363,7 @@ class ViewerApp:
         self.binder.replace_config(config)
         self.applied_preset = source
         self.status.content = f"stage preset applied: {candidate.root_relative}"
+        self._update_effective_state()
         self._schedule_preview()
 
     # -- Input tab ----------------------------------------------------------
@@ -2344,6 +2448,170 @@ class ViewerApp:
             )
         )
 
+    def _describe_effective_state(self) -> str:
+        """Render-only markdown for the *committed* session (Phase 5 Step 3).
+
+        Never reads the Input/mapping/preset dropdowns — only what is
+        actually loaded (``self.core.current_session``, ``self._current_selection``,
+        ``self.applied_preset``, ``self.binder.current()``). Digests are
+        shown only if already cached on the current session (``not
+        computed`` otherwise); this method never hashes anything itself.
+        """
+        session = self.core.current_session
+        derivation = session.derivation
+        config = self.binder.current()
+
+        root, user_path = self._root_and_path_for(self._current_selection)
+        try:
+            candidate = resolve_candidate(root, user_path)
+            summary = describe_candidate(candidate)
+            kind = summary.kind.value
+            run_id = summary.run_id if summary.run_id is not None else "(none)"
+        except Exception as error:
+            candidate = None
+            kind = "(unresolvable)"
+            run_id = f"(error: {error})"
+
+        lines = [
+            "**input**",
+            f"- kind: {kind}",
+            f"- path: {self._current_selection}",
+            f"- run id: {run_id}",
+            "",
+            "**derivation**",
+        ]
+        if derivation is None:
+            lines.append("- as-is (no mapping applied)")
+        else:
+            lines.extend(
+                [
+                    f"- mapping: {derivation.mapping_candidate.root_relative}",
+                    f"- mapping digest: `{derivation.mapping_digest}`",
+                    f"- derived bundle: {derivation.derived_bundle}",
+                    f"- cache reused: {'yes' if derivation.reused else 'no'}",
+                ]
+            )
+
+        lines.extend(["", "**stage**"])
+        if self.applied_preset is not None:
+            lines.append(
+                f"- preset: {self.applied_preset.path} (`{self.applied_preset.digest}`)"
+            )
+        else:
+            lines.append("- inline (no preset provenance)")
+
+        lines.extend(
+            [
+                "",
+                "**render**",
+                f"- width x height: {config.render.width} x {config.render.height}",
+                f"- spp: {config.render.spp}",
+                f"- max_depth: {config.render.max_depth}",
+                "",
+                "**mitsuba**",
+                f"- variant: {self.core.mi.variant()}",
+                f"- seed: {session.seed}",
+                "",
+                "**digests**",
+            ]
+        )
+        if derivation is not None:
+            input_optical_path = derivation.source_candidate.optical_zarr
+        elif candidate is not None:
+            input_optical_path = candidate.optical_zarr
+        else:
+            input_optical_path = session.optical_zarr
+        input_digest = session.peek_digest(input_optical_path)
+        lines.append(f"- input optical: {input_digest or 'not computed'}")
+        if derivation is not None:
+            derived_digest = session.peek_digest(session.optical_zarr)
+            lines.append(f"- derived optical: {derived_digest or 'not computed'}")
+        return "\n".join(lines)
+
+    def _update_effective_state(self) -> None:
+        self.effective_state.content = self._describe_effective_state()
+
+    def _verify_digests(self) -> str:
+        """Re-hash the live session's stores/mapping; report drift from cache.
+
+        Runs on the render worker (I/O-bound hashing). Unlike
+        :meth:`_describe_effective_state`, this always re-reads the
+        filesystem — it is the one explicit, user-triggered way to detect an
+        externally modified input bundle or mapping file, since digests are
+        otherwise only computed once and cached per session.
+        """
+        session = self.core.current_session
+        derivation = session.derivation
+        findings: list[str] = []
+
+        root, user_path = self._root_and_path_for(self._current_selection)
+        try:
+            candidate = resolve_candidate(root, user_path)
+        except Exception as error:
+            return f"verify digests: cannot resolve current input: {error}"
+
+        try:
+            _fresh, drifted = session.refresh_digest(
+                candidate.optical_zarr, zarr_store_sha256
+            )
+        except OSError as error:
+            return f"verify digests: cannot hash input optical store: {error}"
+        if drifted:
+            findings.append("input optical store changed since last digest")
+
+        if candidate.kind is InputKind.RUN_BUNDLE:
+            try:
+                _fresh, drifted = session.refresh_digest(
+                    candidate.path / _RUN_MANIFEST_NAME, sha256_file
+                )
+            except OSError as error:
+                return f"verify digests: cannot hash run manifest: {error}"
+            if drifted:
+                findings.append("run manifest changed since last digest")
+
+        if derivation is not None:
+            try:
+                _fresh, drifted = session.refresh_digest(
+                    session.optical_zarr, zarr_store_sha256
+                )
+            except OSError as error:
+                return f"verify digests: cannot hash derived optical store: {error}"
+            if drifted:
+                findings.append("derived optical store changed since last digest")
+            try:
+                current_mapping_candidate = resolve_mapping_candidate(
+                    self.mapping_root, Path(derivation.mapping_candidate.root_relative)
+                )
+                current_mapping_digest = load_mapping(current_mapping_candidate).digest
+            except MappingCatalogError as error:
+                findings.append(f"mapping unreadable: {error}")
+            else:
+                if current_mapping_digest != derivation.mapping_digest:
+                    findings.append("mapping file changed since it was applied")
+
+        if findings:
+            return "verify digests: drift — " + "; ".join(findings)
+        return "verify digests: ok — matches cached digests"
+
+    def _queue_verify_digests(self) -> None:
+        self.verify_digests_button.disabled = True
+        self.status.content = "verify digests: hashing…"
+
+        def job() -> None:
+            try:
+                result = self._verify_digests()
+            except Exception as error:
+                self.status.content = f"**verify digests failed**: {error}"
+                print(f"VERIFY DIGESTS ERROR {error}", file=sys.stderr)
+            else:
+                self.status.content = result
+                self._update_effective_state()
+                print(f"VERIFY {result}")
+            finally:
+                self.verify_digests_button.disabled = False
+
+        self.worker.submit(job)
+
     def _build_input_tab(self, gui) -> None:
         options = self._dropdown_options()
         self.input_dropdown = gui.add_dropdown(
@@ -2370,6 +2638,15 @@ class ViewerApp:
         )
         self.session_load_button = gui.add_button("Load session")
 
+        # Effective state reflects the *committed* session only — never the
+        # dropdown selections above, which are free to change without
+        # touching the live scene (Phase 2's "selection vs. apply" split).
+        # Populated with real content once ``self.binder`` exists (see the
+        # end of ``ViewerApp.__init__``): this tab is built *during*
+        # ``StageBinder.__init__``, before that attribute is assigned.
+        self.effective_state = gui.add_markdown("(pending)")
+        self.verify_digests_button = gui.add_button("Verify digests")
+
         self.input_dropdown.on_update(lambda _event: self._update_input_summary())
         self.input_refresh_button.on_click(lambda _event: self._refresh_input_catalog())
         self.mapping_dropdown.on_update(lambda _event: self._update_mapping_summary())
@@ -2378,6 +2655,7 @@ class ViewerApp:
         )
         self.input_load_button.on_click(lambda _event: self._queue_load_input())
         self.session_load_button.on_click(lambda _event: self._queue_load_session())
+        self.verify_digests_button.on_click(lambda _event: self._queue_verify_digests())
 
     def _update_input_summary(self) -> None:
         self.input_summary.content = self._describe_selection(self.input_dropdown.value)
@@ -2480,6 +2758,7 @@ class ViewerApp:
             mapping_candidate=mapping_candidate,
             mapping_digest=derived.mapping_digest,
             derived_bundle=derived.bundle_path,
+            reused=derived.reused,
         )
         session.derivation = derivation
         on_stage("swap")
@@ -2514,6 +2793,7 @@ class ViewerApp:
                 self._current_selection = selection
                 self._committed_derivation = derivation
                 self.status.content = f"input loaded ({total:.1f}s)"
+                self._update_effective_state()
                 self._schedule_preview()
             finally:
                 self.input_load_button.disabled = False

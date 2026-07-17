@@ -84,6 +84,7 @@ from mitsuba_viewer_session import (
 from vdbmat.core.volumes import OpticalPropertyVolume
 from vdbmat.exporters.mitsuba import MitsubaExportConfig, prepare_mitsuba_scene
 from vdbmat.io.zarr import read_volume
+from vdbmat.pipeline import sha256_file
 
 
 def _parse_args() -> argparse.Namespace:
@@ -406,6 +407,11 @@ def main() -> None:
             raise SystemExit(
                 f"session replay failed at {error.stage}: {error.message}"
             ) from error
+        # The input session itself is the tracking document for this replay
+        # (unlike the viewer's final-render sidecar, which needs one written
+        # next to the PNG) — just log which one and its digest, so a replay
+        # PNG can still be traced back to its exact session file on disk.
+        print(f"RENDER session={args.session} digest={sha256_file(args.session)}")
     render_stage(optical_zarr, output_png, stage, variant, seed)
 
 

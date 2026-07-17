@@ -1713,3 +1713,244 @@ def test_mapping_session_viewer_final_matches_headless_with_and_without_cache(
 
     assert np.array_equal(viewer_pixels, rendered[0])
     assert np.array_equal(viewer_pixels, rendered[1])
+
+
+# -- Phase 5 Step 3: digest cache, Effective state, final sidecar ----------
+
+
+class _FakeBinder:
+    def __init__(self, config: StageConfig) -> None:
+        self._config = config
+
+    def current(self) -> StageConfig:
+        return self._config
+
+
+def _make_bare_app(
+    core: StageCore,
+    root: Path,
+    selection: str,
+    stage: StageConfig,
+    *,
+    mapping_root: Path | None = None,
+    mapping_work_root: Path | None = None,
+) -> mitsuba_stage_viewer.ViewerApp:
+    """A GUI-free ``ViewerApp`` exposing only what Step 3's methods need.
+
+    Save session / Verify digests / the final sidecar / Effective state
+    don't touch viser widgets directly (status text and dropdowns are set
+    by their ``_queue_*`` callers, not by these building blocks), so this
+    mirrors the ``ViewerApp.__new__`` pattern already used elsewhere in this
+    file for testing transaction methods without a browser.
+    """
+    app = mitsuba_stage_viewer.ViewerApp.__new__(mitsuba_stage_viewer.ViewerApp)
+    app.core = core
+    app.input_root = root
+    app.mapping_root = mapping_root if mapping_root is not None else root
+    app.mapping_work_root = (
+        mapping_work_root if mapping_work_root is not None else root / "derived"
+    )
+    app.interactive_spp = 1
+    app._initial_input_path = (root / selection).resolve()
+    app._initial_sentinel = None
+    app._current_selection = selection
+    app.applied_preset = None
+    app.binder = _FakeBinder(stage)
+    return app
+
+
+def test_capture_session_reuses_cached_digest_across_saves(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "root"
+    root.mkdir()
+    volume = map_material_volume_to_optical(
+        homogeneous_transparent().volume, phase0_provisional_mapping()
+    )
+    bundle = _write_bundle_input(root, "bundle", volume)
+    stage = StageConfig(render=RenderSettings(width=8, height=8, spp=1))
+    core = StageCore(
+        bundle / "optical.zarr",
+        tmp_path / "work",
+        preview_size=8,
+        preview_spp=1,
+        initial=stage,
+    )
+    app = _make_bare_app(core, root, "bundle", stage)
+
+    calls: list[Path] = []
+    real_hash = mitsuba_stage_viewer.zarr_store_sha256
+
+    def counting_hash(path: Path) -> str:
+        calls.append(path)
+        return real_hash(path)
+
+    monkeypatch.setattr(mitsuba_stage_viewer, "zarr_store_sha256", counting_hash)
+
+    app._capture_session(tmp_path / "first.session.json")
+    app._capture_session(tmp_path / "second.session.json")
+
+    # optical.zarr is hashed once and reused for the second Save session,
+    # not re-hashed from scratch every time (Phase 5 Step 3 digest cache).
+    assert len(calls) == 1
+
+
+def test_effective_state_reflects_only_committed_input_not_dropdown(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "root"
+    root.mkdir()
+    volume_a = map_material_volume_to_optical(
+        homogeneous_transparent().volume, phase0_provisional_mapping()
+    )
+    optical_a = root / "a.zarr"
+    write_volume(optical_a, volume_a)
+    volume_b = map_material_volume_to_optical(
+        transparent_opaque_interface().volume, phase0_provisional_mapping()
+    )
+    optical_b = root / "b.zarr"
+    write_volume(optical_b, volume_b)
+
+    stage = StageConfig(render=RenderSettings(width=8, height=8, spp=1))
+    core = StageCore(
+        optical_a, tmp_path / "work", preview_size=8, preview_spp=1, initial=stage
+    )
+    app = _make_bare_app(core, root, "a.zarr", stage)
+
+    before = app._describe_effective_state()
+    assert "a.zarr" in before
+
+    # A dropdown change with no Load/Rebuild commit must not move the panel:
+    # Effective state reads only ``self._current_selection`` (committed),
+    # never a dropdown's live ``.value``.
+    app.input_dropdown = SimpleNamespace(value="b.zarr")
+    assert app._describe_effective_state() == before
+
+    # A real swap (what Load/Rebuild does on success) does update it.
+    session = core.load_input(root, Path("b.zarr"), stage, smoke_spp=1)
+    core.swap_session(session)
+    app._current_selection = "b.zarr"
+    after = app._describe_effective_state()
+    assert "b.zarr" in after
+    assert after != before
+
+
+def test_render_final_sidecar_headless_replay_matches_viewer_pixels(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = tmp_path / "root"
+    root.mkdir()
+    volume = map_material_volume_to_optical(
+        homogeneous_transparent().volume, phase0_provisional_mapping()
+    )
+    bundle = _write_bundle_input(root, "bundle", volume)
+    stage = StageConfig(render=RenderSettings(width=8, height=8, spp=1))
+    core = StageCore(
+        bundle / "optical.zarr",
+        tmp_path / "work",
+        preview_size=8,
+        preview_spp=1,
+        initial=stage,
+        seed=17,
+    )
+    app = _make_bare_app(core, root, "bundle", stage)
+
+    final_png = tmp_path / "final.png"
+    core.render_final(stage, final_png)
+    note = app._write_final_sidecar(final_png)
+    assert note is None
+
+    sidecar_path = app._final_sidecar_path(final_png)
+    assert sidecar_path == tmp_path / "final.session.json"
+    assert sidecar_path.exists()
+
+    viewer_pixels = np.asarray(mi.Bitmap(str(final_png)))
+
+    output_png = tmp_path / "headless.png"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "mitsuba_stage_demo",
+            "--session",
+            str(sidecar_path),
+            "--input-root",
+            str(root),
+            "--output-png",
+            str(output_png),
+        ],
+    )
+    mitsuba_stage_demo.main()
+    out = capsys.readouterr().out
+    assert f"RENDER session={sidecar_path}" in out
+
+    headless_pixels = np.asarray(mi.Bitmap(str(output_png)))
+    assert np.array_equal(viewer_pixels, headless_pixels)
+
+
+def test_render_final_skips_sidecar_for_initial_sentinel_input(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "root"
+    root.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    volume = map_material_volume_to_optical(
+        homogeneous_transparent().volume, phase0_provisional_mapping()
+    )
+    optical_zarr = outside / "model.zarr"
+    write_volume(optical_zarr, volume)
+
+    stage = StageConfig(render=RenderSettings(width=8, height=8, spp=1))
+    core = StageCore(
+        optical_zarr, tmp_path / "work", preview_size=8, preview_spp=1, initial=stage
+    )
+    app = _make_bare_app(core, root, "model.zarr", stage)
+    app._initial_sentinel = f"(initial) {optical_zarr.resolve()}"
+    app._current_selection = app._initial_sentinel
+
+    final_png = tmp_path / "final.png"
+    core.render_final(stage, final_png)
+    note = app._write_final_sidecar(final_png)
+
+    assert note is not None
+    assert "session sidecar skipped" in note
+    assert final_png.exists()
+    assert not app._final_sidecar_path(final_png).exists()
+
+
+def test_verify_digests_reports_ok_then_drift_after_external_edit(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "root"
+    root.mkdir()
+    volume = map_material_volume_to_optical(
+        homogeneous_transparent().volume, phase0_provisional_mapping()
+    )
+    bundle = _write_bundle_input(root, "bundle", volume)
+    stage = StageConfig(render=RenderSettings(width=8, height=8, spp=1))
+    core = StageCore(
+        bundle / "optical.zarr",
+        tmp_path / "work",
+        preview_size=8,
+        preview_spp=1,
+        initial=stage,
+    )
+    app = _make_bare_app(core, root, "bundle", stage)
+
+    first = app._verify_digests()
+    assert first == "verify digests: ok — matches cached digests"
+
+    (bundle / "run.json").write_text(
+        json.dumps(
+            {
+                "schema": {"name": "vdbmat.run", "version": "1.0.0"},
+                "run_id": "changed",
+                "stages": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    second = app._verify_digests()
+    assert "drift" in second
+    assert "run manifest" in second

@@ -25,6 +25,7 @@ from mitsuba_stage import (  # noqa: E402
     stage_config_to_dict,
 )
 from mitsuba_stage_viewer import (  # noqa: E402
+    InputSession,
     RenderWorker,
     StageBinder,
     StageCore,
@@ -540,6 +541,7 @@ def test_stage_edit_clears_applied_preset_and_schedules_once() -> None:
     )
     scheduled: list[str] = []
     app._schedule_preview = lambda: scheduled.append("preview")
+    app._update_effective_state = lambda: None
 
     app._on_stage_change()
 
@@ -570,6 +572,7 @@ def test_apply_stage_preset_replaces_config_once_and_tracks_source(
     app.applied_preset = None
     scheduled: list[str] = []
     app._schedule_preview = lambda: scheduled.append("preview")
+    app._update_effective_state = lambda: None
 
     summary = app._describe_preset_selection("applied.stage.json")
     assert "max depth 15" in summary
@@ -839,3 +842,88 @@ def test_discard_session_dir_removes_directory_and_tolerates_missing(
     _discard_session_dir(missing)  # already-gone directory: no error
 
     assert not present.exists()
+
+
+def _bare_input_session(tmp_path: Path) -> InputSession:
+    """A minimal ``InputSession`` for exercising only the digest-cache API.
+
+    ``volume``/``preview_scene`` are never touched by ``cached_digest`` /
+    ``peek_digest`` / ``refresh_digest``, so plain placeholders avoid
+    building a real Mitsuba scene for these Mitsuba-free tests.
+    """
+    return InputSession(
+        optical_zarr=tmp_path / "optical.zarr",
+        work_dir=tmp_path / "work",
+        volume=object(),
+        seed=0,
+        preview_scene=object(),
+    )
+
+
+def test_cached_digest_computes_once_per_resolved_path(tmp_path: Path) -> None:
+    session = _bare_input_session(tmp_path)
+    store = tmp_path / "store"
+    store.mkdir()
+    calls: list[Path] = []
+
+    def compute(path: Path) -> str:
+        calls.append(path)
+        return "sha256:" + "a" * 64
+
+    first = session.cached_digest(store, compute)
+    second = session.cached_digest(store, compute)
+
+    assert first == second == "sha256:" + "a" * 64
+    assert calls == [store.resolve()]  # hashed exactly once
+
+
+def test_cached_digest_is_scoped_per_session(tmp_path: Path) -> None:
+    store = tmp_path / "store"
+    store.mkdir()
+    session_a = _bare_input_session(tmp_path)
+    session_b = _bare_input_session(tmp_path)
+    calls: list[Path] = []
+
+    def compute(path: Path) -> str:
+        calls.append(path)
+        return "sha256:" + "b" * 64
+
+    session_a.cached_digest(store, compute)
+    session_b.cached_digest(store, compute)
+
+    assert calls == [store.resolve(), store.resolve()]  # not shared
+
+
+def test_peek_digest_returns_none_before_first_computation(
+    tmp_path: Path,
+) -> None:
+    session = _bare_input_session(tmp_path)
+    store = tmp_path / "store"
+    store.mkdir()
+
+    assert session.peek_digest(store) is None
+
+    session.cached_digest(store, lambda _path: "sha256:" + "c" * 64)
+
+    assert session.peek_digest(store) == "sha256:" + "c" * 64
+
+
+def test_refresh_digest_always_recomputes_and_reports_drift(
+    tmp_path: Path,
+) -> None:
+    session = _bare_input_session(tmp_path)
+    store = tmp_path / "store"
+    store.mkdir()
+    values = iter(["sha256:" + "d" * 64, "sha256:" + "e" * 64])
+
+    first_digest, first_drifted = session.refresh_digest(store, lambda _p: next(values))
+    assert first_digest == "sha256:" + "d" * 64
+    assert first_drifted is False  # nothing cached yet: not "drift"
+
+    second_digest, second_drifted = session.refresh_digest(
+        store, lambda _p: next(values)
+    )
+    assert second_digest == "sha256:" + "e" * 64
+    assert second_drifted is True  # differs from what refresh_digest just cached
+
+    assert session.peek_digest(store) == "sha256:" + "e" * 64

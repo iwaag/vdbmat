@@ -184,9 +184,7 @@ class SessionMappingRef:
     def __post_init__(self) -> None:
         _portable_path(self.path, field="mapping.path")
         _digest(self.digest, field="mapping.digest")
-        _digest(
-            self.derived_optical_sha256, field="mapping.derived_optical_sha256"
-        )
+        _digest(self.derived_optical_sha256, field="mapping.derived_optical_sha256")
 
 
 @dataclass(frozen=True, slots=True)
@@ -246,24 +244,38 @@ def create_viewer_session(
     *,
     preset: SessionPresetRef | None = None,
     mapping: SessionMappingRef | None = None,
+    optical_digest: str | None = None,
+    run_manifest_digest: str | None = None,
 ) -> ViewerSession:
     """Capture one verified catalog candidate as a digest-pinned session.
 
     ``mapping``, when given, must already carry the *derived* bundle's
     optical digest (computed by the caller after regeneration) — this
     function only pins the source candidate, never runs the pipeline.
+
+    ``optical_digest``/``run_manifest_digest``, when given, are used as-is
+    instead of re-hashing ``candidate``'s files — a caller that already has
+    them cached (e.g. ``InputSession.cached_digest``) passes them through to
+    avoid a redundant full-store hash. ``run_manifest_digest`` is ignored
+    for a non-bundle candidate (the result's value is always ``None`` then).
     """
     try:
-        optical_digest = zarr_store_sha256(candidate.optical_zarr)
-        run_digest = (
-            sha256_file(candidate.path / _RUN_MANIFEST_NAME)
-            if candidate.kind is InputKind.RUN_BUNDLE
-            else None
+        digest = (
+            optical_digest
+            if optical_digest is not None
+            else zarr_store_sha256(candidate.optical_zarr)
         )
+        run_digest = None
+        if candidate.kind is InputKind.RUN_BUNDLE:
+            run_digest = (
+                run_manifest_digest
+                if run_manifest_digest is not None
+                else sha256_file(candidate.path / _RUN_MANIFEST_NAME)
+            )
         input_ref = SessionInputRef(
             kind=candidate.kind,
             path=candidate.root_relative,
-            optical_sha256=optical_digest,
+            optical_sha256=digest,
             run_manifest_sha256=run_digest,
         )
         return ViewerSession(
@@ -302,9 +314,7 @@ def viewer_session_from_dict(document: object) -> ViewerSession:
                 f"{sorted(_SUPPORTED_FORMAT_VERSIONS)!r}, got {format_version!r}"
             )
         if format_version == _FORMAT_VERSION_1_0 and "mapping" in root:
-            raise ValueError(
-                "format_version 1.0.0 must not declare a mapping section"
-            )
+            raise ValueError("format_version 1.0.0 must not declare a mapping section")
 
         input_ref = _parse_input(root["input"])
         stage_config, effective_digest, preset = _parse_stage_and_render(
@@ -641,9 +651,7 @@ def _resolve_session_mapping(
     if reference is None:
         return None
     if mapping_root is None:
-        raise ViewerSessionError(
-            "resolve", "mapping reference requires --mapping-root"
-        )
+        raise ViewerSessionError("resolve", "mapping reference requires --mapping-root")
     try:
         candidate = resolve_mapping_candidate(mapping_root, Path(reference.path))
         mapping_config = load_mapping(candidate)

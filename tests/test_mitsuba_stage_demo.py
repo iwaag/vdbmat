@@ -393,6 +393,7 @@ def test_main_session_mode_replays_resolved_session(
         variant="llvm_ad_rgb",
         seed=42,
     )
+    args.session.write_text("{}", encoding="utf-8")
     captured: dict[str, Any] = {}
 
     def fake_render_stage(
@@ -437,6 +438,11 @@ def test_main_session_mode_replays_resolved_session(
     assert captured["stage_config"] is stage
     assert captured["variant"] == "llvm_ad_rgb"
     assert captured["seed"] == 42
+
+    from vdbmat.pipeline import sha256_file
+
+    out = capsys.readouterr().out
+    assert f"RENDER session={args.session} digest={sha256_file(args.session)}" in out
 
 
 def test_main_session_mode_rejects_variant_mismatch(
