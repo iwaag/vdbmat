@@ -29,6 +29,7 @@ from mitsuba_stage_viewer import (  # noqa: E402
     StageBinder,
     StageCore,
     ViewerApp,
+    _discard_session_dir,
     _final_render_key,
     _fit_preview_to_aspect,
     _parse_args,
@@ -40,6 +41,7 @@ from mitsuba_stage_viewer import (  # noqa: E402
     _slug_for,
     _StageTimer,
     _structure_key,
+    _sweep_stale_session_dirs,
 )
 from mitsuba_viewer_session import SessionPresetRef, ViewerSessionError  # noqa: E402
 
@@ -771,3 +773,69 @@ def test_stage_timer_full_transaction_logs_one_stage_line_per_transition() -> No
     lines = buffer.getvalue().strip().splitlines()
     logged_stages = [line.rsplit(" ", 2)[1] for line in lines]
     assert logged_stages == list(stages)
+
+
+def test_sweep_stale_session_dirs_removes_only_inputs_entries(
+    tmp_path: Path,
+) -> None:
+    work_dir = tmp_path / "work"
+    stale_a = work_dir / "inputs" / "000-bundle-a"
+    stale_b = work_dir / "inputs" / "001-bundle-b"
+    stale_a.mkdir(parents=True)
+    stale_b.mkdir(parents=True)
+    (stale_a / "preview_scene").mkdir()
+    derived = work_dir / "derived" / "some-digest"
+    derived.mkdir(parents=True)
+    other_file = work_dir / "viewer.stage.json"
+    other_file.write_text("{}", encoding="utf-8")
+
+    _sweep_stale_session_dirs(work_dir)
+
+    assert not stale_a.exists()
+    assert not stale_b.exists()
+    assert (work_dir / "inputs").exists()  # the inputs/ dir itself is kept
+    assert derived.exists()
+    assert other_file.exists()
+
+
+def test_sweep_stale_session_dirs_is_noop_without_inputs_dir(
+    tmp_path: Path,
+) -> None:
+    work_dir = tmp_path / "work"
+    work_dir.mkdir()
+    (work_dir / "derived").mkdir()
+
+    _sweep_stale_session_dirs(work_dir)  # must not raise
+
+    assert (work_dir / "derived").exists()
+
+
+def test_sweep_stale_session_dirs_skips_entry_escaping_work_dir_via_symlink(
+    tmp_path: Path,
+) -> None:
+    work_dir = tmp_path / "work"
+    inputs_dir = work_dir / "inputs"
+    inputs_dir.mkdir(parents=True)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "keepme").write_text("data", encoding="utf-8")
+    escaping_link = inputs_dir / "000-escapes"
+    escaping_link.symlink_to(outside, target_is_directory=True)
+
+    _sweep_stale_session_dirs(work_dir)
+
+    assert (outside / "keepme").exists()
+
+
+def test_discard_session_dir_removes_directory_and_tolerates_missing(
+    tmp_path: Path,
+) -> None:
+    present = tmp_path / "present"
+    present.mkdir()
+    (present / "file.txt").write_text("x", encoding="utf-8")
+    missing = tmp_path / "missing"
+
+    _discard_session_dir(present)
+    _discard_session_dir(missing)  # already-gone directory: no error
+
+    assert not present.exists()

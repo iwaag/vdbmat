@@ -607,7 +607,11 @@ class InputLoadError(Exception):
 
 
 def _discard_session_dir(session_dir: Path) -> None:
-    """Best-effort removal of a session directory abandoned by a failed load."""
+    """Best-effort removal of one no-longer-referenced session directory.
+
+    Used both for a session abandoned by a failed load and for a session
+    replaced by a successful swap.
+    """
     try:
         if session_dir.exists():
             shutil.rmtree(session_dir)
@@ -616,6 +620,30 @@ def _discard_session_dir(session_dir: Path) -> None:
             f"INPUT LOAD CLEANUP WARNING: could not remove {session_dir}: {error}",
             file=sys.stderr,
         )
+
+
+def _sweep_stale_session_dirs(work_dir: Path) -> None:
+    """Remove leftover ``work_dir/inputs/`` entries from a prior process.
+
+    Called once at startup, before the initial :class:`StageCore` session is
+    built. Scoped to ``work_dir/inputs/`` only — ``derived/`` and any other
+    user files under ``work_dir`` are never touched. Each candidate's
+    resolved path is verified to stay within ``work_dir`` before removal
+    (defense against a symlink planted under ``inputs/``). A missing
+    ``inputs/`` directory (fresh ``--work-dir``, or none given) is a no-op.
+    """
+    inputs_dir = work_dir / _INPUTS_DIRNAME
+    if not inputs_dir.is_dir():
+        return
+    resolved_work_dir = work_dir.resolve()
+    for entry in inputs_dir.iterdir():
+        try:
+            resolved_entry = entry.resolve()
+        except OSError:
+            continue
+        if resolved_work_dir not in resolved_entry.parents:
+            continue
+        _discard_session_dir(entry)
 
 
 def _nested(mapping: dict[str, object], path: str) -> object:
@@ -852,9 +880,22 @@ class StageCore:
         return session
 
     def swap_session(self, session: InputSession) -> None:
-        """Replace the current session and advance the session generation."""
+        """Replace the current session and advance the session generation.
+
+        Discards the replaced session's own work directory (its
+        ``inputs/NNN-slug/`` PLY/scene side-effect files). Safe because the
+        render worker runs one job at a time and nothing outside
+        :class:`StageCore` holds a reference across a swap (see
+        :class:`InputSession`): a queued preview/final-render job always
+        reads ``self._session`` at execution time, never a captured old
+        session, so the replaced directory is never read again once this
+        method returns.
+        """
+        old_session = self._session
         self._session = session
         self.session_generation += 1
+        if old_session.work_dir != session.work_dir:
+            _discard_session_dir(old_session.work_dir)
 
     def _ensure_final(self, session: InputSession, render: RenderSettings) -> None:
         final_key = _final_render_key(render)
@@ -1716,6 +1757,7 @@ class ViewerApp:
             work_dir = Path(tempfile.mkdtemp(prefix="mitsuba-stage-viewer-"))
         work_dir.mkdir(parents=True, exist_ok=True)
         self.work_dir = work_dir
+        _sweep_stale_session_dirs(work_dir)
 
         try:
             startup = _resolve_viewer_startup(args, work_dir)

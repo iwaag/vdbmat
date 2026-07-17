@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import sys
 from dataclasses import replace
 from pathlib import Path
@@ -49,6 +50,7 @@ from mitsuba_stage_presets import load_preset, resolve_preset  # noqa: E402
 from mitsuba_stage_regen import RegenError, regenerate_optical  # noqa: E402
 from mitsuba_stage_viewer import (  # noqa: E402
     InputLoadError,
+    InputSession,
     StageCore,
     TraversedPreviewScene,
     _session_work_dir,
@@ -270,13 +272,59 @@ def test_swap_session_uses_fresh_work_dir_and_advances_generation(
         tmp_path / "work", 1, optical_zarr
     )
     assert second_session.work_dir != first_session_dir
-    # Reloading the same input never reuses or overwrites the old artefacts.
-    assert (first_session_dir / "preview_scene").exists()
+    # Reloading the same input never reuses or overwrites the old artefacts,
+    # and a successful swap discards the replaced session's own directory
+    # (Phase 5 Step 2 cleanup rule) rather than letting it accumulate.
+    assert not first_session_dir.exists()
     assert (second_session.work_dir / "preview_scene").exists()
 
     # The swapped-in session renders through the normal StageCore API.
     pixels, _stats, _route = core.render_preview(initial)
     assert pixels.shape == (8, 8, 3)
+
+
+def test_preview_and_final_render_unaffected_by_discarded_old_session_dir(
+    tmp_path: Path,
+) -> None:
+    """Neither preview nor final render holds a lazy reference to an old dir.
+
+    Preview scenes are ``mi.load_dict()``-ed (geometry read into memory)
+    at session-build time, and a final render always re-``load_dict()``s
+    from the *current* session's own ``final_scene`` directory (never a
+    stale one) — see :meth:`StageCore.swap_session`'s docstring. This test
+    exercises both through two real ``load_input`` swaps (each of which
+    discards the just-replaced directory) and confirms preview/final still
+    render correctly off the surviving, current session.
+    """
+    root = tmp_path / "root"
+    optical_a, _optical_b = _write_two_inputs(root)
+    stage = StageConfig(render=RenderSettings(width=8, height=8, spp=1))
+    core = StageCore(
+        optical_a, tmp_path / "work", preview_size=8, preview_spp=1, initial=stage
+    )
+    first_dir = core._session.work_dir
+
+    second_session = core.load_input(root, Path("b.zarr"), stage, smoke_spp=1)
+    second_dir = second_session.work_dir
+    assert not first_dir.exists()
+
+    third_session = core.load_input(root, Path("a.zarr"), stage, smoke_spp=1)
+    assert not second_dir.exists()
+    assert core._session is third_session
+
+    pixels, stats, _route = core.render_preview(stage)
+    assert pixels.shape == (8, 8, 3)
+    assert "max_depth" in stats
+
+    final_png = tmp_path / "final.png"
+    core.render_final(stage, final_png)
+    assert final_png.exists()
+    summary = json.loads(
+        (third_session.work_dir / "final_scene" / "scene-summary.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert summary["render"]["max_depth"] == stage.render.max_depth
 
 
 def _write_two_inputs(root: Path) -> tuple[Path, Path]:
@@ -380,13 +428,34 @@ def test_load_input_round_trip_renders_and_separates_final_artifacts(
         initial=stage,
     )
 
+    def _assert_final_scene_max_depth(session: InputSession) -> None:
+        summary = json.loads(
+            (session.work_dir / "final_scene" / "scene-summary.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        assert summary["render"]["max_depth"] == 13
+
     sessions = [core._session]
+    work_dirs = {core._session.work_dir}
+    # The initial session's own final_scene is prepared during StageCore
+    # construction; check it before the first swap discards it.
+    _assert_final_scene_max_depth(core._session)
+
     for selection in (Path("standalone-b.zarr"), Path("bundle-a")):
-        sessions.append(core.load_input(root, selection, stage, smoke_spp=1))
+        session = core.load_input(root, selection, stage, smoke_spp=1)
+        sessions.append(session)
+        work_dirs.add(session.work_dir)
         pixels, stats, _route = core.render_preview(stage)
         assert pixels.shape == (8, 8, 3)
         assert "max_depth=13" in stats
         core.render_final(stage, tmp_path / f"final-{len(sessions)}.png")
+        _assert_final_scene_max_depth(session)
+        # A successful swap discards the replaced session's own work
+        # directory (Phase 5 Step 2 cleanup rule) instead of letting it
+        # accumulate; every earlier session's directory is gone by now.
+        for previous in sessions[:-1]:
+            assert not previous.work_dir.exists()
 
     assert core.session_generation == 2
     assert [session.optical_zarr for session in sessions] == [
@@ -394,14 +463,7 @@ def test_load_input_round_trip_renders_and_separates_final_artifacts(
         optical_b.resolve(),
         (bundle_a / "optical.zarr").resolve(),
     ]
-    assert len({session.work_dir for session in sessions}) == 3
-    for session in sessions:
-        summary = json.loads(
-            (session.work_dir / "final_scene" / "scene-summary.json").read_text(
-                encoding="utf-8"
-            )
-        )
-        assert summary["render"]["max_depth"] == 13
+    assert len(work_dirs) == 3
 
 
 def test_prepare_input_session_is_transactional_and_preserves_live_seed(
@@ -583,6 +645,47 @@ def test_viewer_app_session_startup_builds_core_from_resolved_input(
         assert app.core.current_session.optical_zarr == optical_a.resolve()
         assert app.core.current_session.seed == 5
         assert app._current_selection == "a.zarr"
+    finally:
+        app.server.stop()
+
+
+def test_viewer_app_startup_sweeps_stale_inputs_but_keeps_derived(
+    tmp_path: Path,
+) -> None:
+    """A restart with the same ``--work-dir`` cleans up the prior process's
+    ``inputs/`` leftovers (Phase 5 Step 2 cleanup rule (b)) before building
+    the initial session, without touching ``derived/`` or other work-dir
+    files.
+    """
+    root = tmp_path / "root"
+    optical_a, _optical_b = _write_two_inputs(root)
+    work_dir = tmp_path / "work"
+
+    stale_dir = work_dir / "inputs" / "999-leftover"
+    stale_dir.mkdir(parents=True)
+    (stale_dir / "marker.txt").write_text("stale", encoding="utf-8")
+    derived_marker = work_dir / "derived" / "keepme.txt"
+    derived_marker.parent.mkdir(parents=True)
+    derived_marker.write_text("keep", encoding="utf-8")
+
+    args = mitsuba_stage_viewer._parse_args(
+        [
+            str(optical_a),
+            "--input-root",
+            str(root),
+            "--port",
+            "0",
+            "--work-dir",
+            str(work_dir),
+        ]
+    )
+    app = mitsuba_stage_viewer.ViewerApp(args)
+    try:
+        assert not stale_dir.exists()
+        assert derived_marker.exists()
+        # The initial session's own directory (built after the sweep) is
+        # untouched by it.
+        assert app.core.current_session.work_dir.exists()
     finally:
         app.server.stop()
 
@@ -1030,6 +1133,64 @@ def test_load_input_transaction_applies_mapping_and_records_derivation(
     ]
     assert second_derivation is not None
     assert second_derivation.derived_bundle == derivation.derived_bundle
+
+
+def test_load_input_transaction_regenerates_after_derived_cache_wiped(
+    tmp_path: Path,
+) -> None:
+    """A fully deleted ``--mapping-work-root`` recovers on the next Load/Rebuild.
+
+    Phase 5 Step 2 cleanup rule (c): the derived cache is content-addressed
+    and safe to delete wholesale between runs — a subsequent Load/Rebuild
+    regenerates it rather than failing or silently reusing something stale.
+    """
+    root = tmp_path / "root"
+    bundle = _write_pipeline_bundle(root, "bundle")
+    mapping_root = tmp_path / "mappings"
+    _write_mapping_document(mapping_root / "tinted.optical-mapping.json", tint=True)
+    mapping_work_root = tmp_path / "derived"
+
+    stage = StageConfig(render=RenderSettings(width=8, height=8, spp=1))
+    core = StageCore(
+        bundle / "optical.zarr",
+        tmp_path / "work",
+        preview_size=8,
+        preview_spp=1,
+        initial=stage,
+    )
+
+    app = mitsuba_stage_viewer.ViewerApp.__new__(mitsuba_stage_viewer.ViewerApp)
+    app.core = core
+    app.input_root = root
+    app.mapping_root = mapping_root
+    app.mapping_work_root = mapping_work_root
+    app.interactive_spp = 1
+    app._initial_input_path = (bundle / "optical.zarr").resolve()
+    app._initial_sentinel = None
+
+    first_derivation = app._load_input_transaction(
+        "bundle", "tinted.optical-mapping.json", stage, lambda _stage: None
+    )
+    assert first_derivation is not None
+    assert mapping_work_root.exists()
+
+    shutil.rmtree(mapping_work_root)
+    assert not mapping_work_root.exists()
+
+    stages: list[str] = []
+    second_derivation = app._load_input_transaction(
+        "bundle", "tinted.optical-mapping.json", stage, stages.append
+    )
+
+    # No cache to reuse: "map" runs the full pipeline again, not
+    # "map: reused cache".
+    assert stages == ["validate", "map", "prepare", "load", "smoke", "swap"]
+    assert second_derivation is not None
+    assert second_derivation.mapping_digest == first_derivation.mapping_digest
+    assert core.current_session.derivation is second_derivation
+
+    pixels, _stats, _route = core.render_preview(stage)
+    assert pixels.shape == (8, 8, 3)
 
 
 def test_load_input_transaction_preserves_map_stage_error_and_live_session(
