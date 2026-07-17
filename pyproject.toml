@@ -30,6 +30,9 @@ mitsuba-viewer = [
     { include-group = "mitsuba" },
     "viser>=0.2",
 ]
+gui-capture = [
+    "playwright>=1.55",
+]
 openvdb = []
 
 [tool.pytest.ini_options]
