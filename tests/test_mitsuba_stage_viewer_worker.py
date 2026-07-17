@@ -38,6 +38,7 @@ from mitsuba_stage_viewer import (  # noqa: E402
     _resolve_session_root,
     _session_work_dir,
     _slug_for,
+    _StageTimer,
     _structure_key,
 )
 from mitsuba_viewer_session import SessionPresetRef, ViewerSessionError  # noqa: E402
@@ -689,3 +690,84 @@ def test_session_work_dir_sequence_is_unique_for_repeated_input(
     assert first == tmp_path / "inputs" / "000-bundle-a"
     assert second == tmp_path / "inputs" / "001-bundle-a"
     assert first != second
+
+
+def test_stage_timer_first_advance_has_no_suffix_and_logs_nothing(
+    capsys: object,
+) -> None:
+    timer = _StageTimer("input load")
+
+    suffix = timer.advance("validate")
+
+    assert suffix == ""
+    assert capsys.readouterr().out == ""  # type: ignore[attr-defined]
+
+
+def test_stage_timer_advance_logs_previous_stage_and_returns_status_suffix(
+    capsys: object,
+) -> None:
+    timer = _StageTimer("input load")
+    timer.advance("validate")
+
+    suffix = timer.advance("map")
+
+    out = capsys.readouterr().out  # type: ignore[attr-defined]
+    lines = out.strip().splitlines()
+    assert len(lines) == 1
+    prefix, elapsed_text = lines[0].rsplit(" ", 1)
+    assert prefix == "STAGE input load validate"
+    assert float(elapsed_text) >= 0.0
+    assert suffix.startswith(" (validate ")
+    assert suffix.endswith("s)")
+
+
+def test_stage_timer_finish_logs_last_stage_and_returns_total_elapsed(
+    capsys: object,
+) -> None:
+    timer = _StageTimer("input load")
+    timer.advance("validate")
+    timer.advance("map")
+
+    total = timer.finish()
+
+    out = capsys.readouterr().out  # type: ignore[attr-defined]
+    lines = out.strip().splitlines()
+    assert len(lines) == 2
+    assert lines[0].startswith("STAGE input load validate ")
+    assert lines[1].startswith("STAGE input load map ")
+    assert total >= 0.0
+
+
+def test_stage_timer_finish_without_any_advance_logs_nothing(
+    capsys: object,
+) -> None:
+    timer = _StageTimer("session load")
+
+    total = timer.finish()
+
+    assert capsys.readouterr().out == ""  # type: ignore[attr-defined]
+    assert total >= 0.0
+
+
+def test_stage_timer_full_transaction_logs_one_stage_line_per_transition() -> None:
+    """The full validate/map/prepare/load/smoke/swap sequence stays intact.
+
+    Timing is purely additive: every stage that fires through ``advance()``
+    produces exactly one STAGE line (via the following ``advance()`` or the
+    closing ``finish()``), and the stage names/order the caller passed
+    through are echoed back verbatim.
+    """
+    import io
+    from contextlib import redirect_stdout
+
+    stages = ("validate", "map", "prepare", "load", "smoke", "swap")
+    timer = _StageTimer("input load")
+    buffer = io.StringIO()
+    with redirect_stdout(buffer):
+        for stage in stages:
+            timer.advance(stage)
+        timer.finish()
+
+    lines = buffer.getvalue().strip().splitlines()
+    logged_stages = [line.rsplit(" ", 2)[1] for line in lines]
+    assert logged_stages == list(stages)

@@ -548,6 +548,49 @@ _NO_PRESETS = "(no presets found)"
 _AS_IS_MAPPING = "(bundle optical as-is)"
 
 
+class _StageTimer:
+    """Times the stages of one transaction (Load/Rebuild, session load, ...).
+
+    Wraps an ``on_stage`` callback: each call logs the just-finished stage's
+    elapsed seconds as a ``STAGE <transaction> <stage> <elapsed_s>`` stdout
+    line (the cancel-adoption and Phase 5 report measurement source) and
+    returns a status suffix like ``" (map 3.2s)"`` for the caller to append
+    to its next status message. Stage names and transition order are exactly
+    what the caller already passes; this only adds timing, so it does not
+    change any existing stage-sequence test.
+    """
+
+    def __init__(self, transaction: str) -> None:
+        self.transaction = transaction
+        self._stage: str | None = None
+        self._stage_started = time.perf_counter()
+        self._total_started = self._stage_started
+
+    def advance(self, stage: str) -> str:
+        """Log the just-finished stage (if any) and start timing ``stage``.
+
+        Returns "" for the first stage of the transaction, else a status
+        suffix describing the previous stage's elapsed time.
+        """
+        now = time.perf_counter()
+        suffix = ""
+        if self._stage is not None:
+            elapsed = now - self._stage_started
+            print(f"STAGE {self.transaction} {self._stage} {elapsed:.3f}")
+            suffix = f" ({self._stage} {elapsed:.1f}s)"
+        self._stage = stage
+        self._stage_started = now
+        return suffix
+
+    def finish(self) -> float:
+        """Log the final stage and return the transaction's total elapsed."""
+        now = time.perf_counter()
+        if self._stage is not None:
+            elapsed = now - self._stage_started
+            print(f"STAGE {self.transaction} {self._stage} {elapsed:.3f}")
+        return now - self._total_started
+
+
 class InputLoadError(Exception):
     """Load/Rebuild failed at a named stage; the current session is untouched.
 
@@ -2033,8 +2076,11 @@ class ViewerApp:
         self.session_load_button.disabled = True
         self.status.content = "session load: resolve path…"
 
+        timer = _StageTimer("session load")
+
         def on_stage(stage: str) -> None:
-            self.status.content = f"session load: {stage}…"
+            suffix = timer.advance(stage)
+            self.status.content = f"session load: {stage}…{suffix}"
 
         def job() -> None:
             try:
@@ -2045,13 +2091,16 @@ class ViewerApp:
                 )
                 self._load_session_transaction(path, on_stage)
             except (InputLoadError, ViewerSessionError) as error:
+                timer.finish()
                 self.status.content = f"**session load failed**: {error}"
                 print(f"SESSION LOAD ERROR {error}", file=sys.stderr)
             except Exception as error:
+                timer.finish()
                 self.status.content = f"**session load failed**: {error}"
                 print(f"SESSION LOAD ERROR {error}", file=sys.stderr)
             else:
-                self.status.content = "session loaded"
+                total = timer.finish()
+                self.status.content = f"session loaded ({total:.1f}s)"
                 self._update_input_summary()
                 self._update_preset_summary()
                 self._update_mapping_summary()
@@ -2067,9 +2116,10 @@ class ViewerApp:
         self.status.content = "final render queued…"
 
         def job() -> None:
-            started = time.perf_counter()
+            timer = _StageTimer("final render")
+            timer.advance("render")
             stats = self.core.render_final(config, path)
-            elapsed = time.perf_counter() - started
+            elapsed = timer.finish()
             self.status.content = f"final {elapsed:.1f}s → {path} — PIXELSTATS {stats}"
             print(f"FINAL {path} PIXELSTATS {stats}")
 
@@ -2402,8 +2452,11 @@ class ViewerApp:
         self.input_load_button.disabled = True
         self.status.content = "input load: validate…"
 
+        timer = _StageTimer("input load")
+
         def on_stage(stage: str) -> None:
-            self.status.content = f"input load: {stage}…"
+            suffix = timer.advance(stage)
+            self.status.content = f"input load: {stage}…{suffix}"
 
         def job() -> None:
             try:
@@ -2411,12 +2464,14 @@ class ViewerApp:
                     selection, mapping_selection, current_config, on_stage
                 )
             except InputLoadError as error:
+                timer.finish()
                 self.status.content = f"**{error}**"
                 print(f"INPUT LOAD ERROR {error}", file=sys.stderr)
             else:
+                total = timer.finish()
                 self._current_selection = selection
                 self._committed_derivation = derivation
-                self.status.content = "input loaded"
+                self.status.content = f"input loaded ({total:.1f}s)"
                 self._schedule_preview()
             finally:
                 self.input_load_button.disabled = False
