@@ -138,7 +138,9 @@ def _write_mapping_document(path: Path) -> None:
 
 def test_writer_reader_round_trip_preserves_all_fields() -> None:
     config = StageConfig(
-        render=RenderSettings(width=320, height=240, spp=16, max_depth=12),
+        render=RenderSettings(
+            width=320, height=240, spp=16, max_depth=12, denoise=True
+        ),
         backdrop=BackdropSettings(checker_scale=11),
     )
     original = _standalone_session(
@@ -160,6 +162,7 @@ def test_writer_reader_round_trip_preserves_all_fields() -> None:
         "height": 240,
         "spp": 16,
         "max_depth": 12,
+        "denoise": True,
     }
 
 

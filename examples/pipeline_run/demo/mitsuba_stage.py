@@ -22,13 +22,14 @@ It holds two things:
 
 Stage-config JSON files (``*.stage.json``) carry a format header::
 
-    {"format": "vdbmat.stage-config", "format_version": "1.1.0", ...}
+    {"format": "vdbmat.stage-config", "format_version": "1.2.0", ...}
 
 Sections and fields may be given partially; anything omitted keeps its
 default. Unknown keys, wrong types, and out-of-range values are rejected
-explicitly rather than ignored. Readers also accept legacy version ``1.0.0``;
-that version does not allow ``render.max_depth`` and supplies the default value
-8 when loaded.
+explicitly rather than ignored. Readers also accept legacy versions ``1.0.0``
+and ``1.1.0``; version ``1.0.0`` does not allow ``render.max_depth`` (default
+8 supplied) and neither ``1.0.0`` nor ``1.1.0`` allow ``render.denoise``
+(default ``False`` supplied).
 
 Camera-override convention (only used when ``camera`` is non-null): the
 direction from the object to the camera is built from ``azimuth_deg``
@@ -55,8 +56,10 @@ import numpy as np
 from vdbmat.core.geometry import GridGeometry
 
 STAGE_CONFIG_FORMAT = "vdbmat.stage-config"
-STAGE_CONFIG_FORMAT_VERSION = "1.1.0"
-STAGE_CONFIG_ACCEPTED_VERSIONS = frozenset({"1.0.0", STAGE_CONFIG_FORMAT_VERSION})
+STAGE_CONFIG_FORMAT_VERSION = "1.2.0"
+STAGE_CONFIG_ACCEPTED_VERSIONS = frozenset(
+    {"1.0.0", "1.1.0", STAGE_CONFIG_FORMAT_VERSION}
+)
 
 _PATTERNS = ("checker", "solid")
 
@@ -126,10 +129,12 @@ class RenderSettings:
     height: int = 512
     spp: int = 128
     max_depth: int = 8
+    denoise: bool = False
 
     def __post_init__(self) -> None:
         for name in ("width", "height", "spp", "max_depth"):
             _check_positive_int(f"render.{name}", getattr(self, name))
+        _check_bool("render.denoise", self.denoise)
 
 
 @dataclass(frozen=True)
@@ -291,6 +296,10 @@ _SECTION_TYPES: dict[str, type] = {
     "floor": FloorSettings,
     "key_light": KeyLightSettings,
 }
+_RENDER_ALLOWED_FIELDS_BY_VERSION: dict[str, set[str]] = {
+    "1.0.0": {"width", "height", "spp"},
+    "1.1.0": {"width", "height", "spp", "max_depth"},
+}
 _OVERRIDE_TYPES: dict[str, type] = {
     "camera": CameraOverride,
     "backlight": BacklightOverride,
@@ -307,9 +316,7 @@ def _section_from_dict(
     if not isinstance(data, dict):
         raise StageConfigError(f"section {section!r} must be an object")
     known = (
-        allowed_fields
-        if allowed_fields is not None
-        else {f.name for f in fields(cls)}
+        allowed_fields if allowed_fields is not None else {f.name for f in fields(cls)}
     )
     unknown = set(data) - known
     if unknown:
@@ -346,8 +353,8 @@ def stage_config_from_dict(document: object) -> StageConfig:
     for section, cls in _SECTION_TYPES.items():
         if section in document:
             allowed_fields = None
-            if section == "render" and version == "1.0.0":
-                allowed_fields = {"width", "height", "spp"}
+            if section == "render":
+                allowed_fields = _RENDER_ALLOWED_FIELDS_BY_VERSION.get(version)
             kwargs[section] = _section_from_dict(
                 cls,
                 document[section],

@@ -77,7 +77,7 @@ _EFFECTIVE_STAGE_KEYS = frozenset(
         "backlight",
     }
 )
-_RENDER_KEYS = frozenset({"width", "height", "spp", "max_depth"})
+_RENDER_KEYS = frozenset({"width", "height", "spp", "max_depth", "denoise"})
 _EFFECTIVE_SECTION_KEYS = {
     "backdrop": frozenset(
         {
@@ -577,6 +577,7 @@ def _parse_stage_and_render(
         height=render["height"],
         spp=render["spp"],
         max_depth=render["max_depth"],
+        denoise=render["denoise"],
     )
     config_without_render = stage_config_from_dict(effective)
     config = replace(config_without_render, render=render_settings)
