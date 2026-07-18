@@ -1256,11 +1256,19 @@ def test_saved_denoised_session_viewer_final_matches_headless_session_replay(
 ) -> None:
     """Denoised counterpart of the viewer/headless session-replay match test.
 
-    Closes the pixel-identical check deferred in Step 3's report (denoise
-    plan): with ``mitsuba_stage_demo.py``'s ``render_stage()`` now wired to
+    Closes the check deferred in Step 3's report (denoise plan): with
+    ``mitsuba_stage_demo.py``'s ``render_stage()`` now wired to
     ``finalize_render_image`` (Step 4), a denoised viewer final render and a
     denoised headless ``--session`` replay of the same session must still
-    match pixel-for-pixel on the same GPU/driver.
+    agree closely on the same GPU/driver. The *raw* (pre-denoise) image is
+    asserted pixel-identical, matching the non-denoise case exactly (``mi.
+    render`` itself is deterministic given the same scene/seed — confirmed
+    by a real white-bundle run in Step 5's report). The *denoised* image is
+    only asserted near-identical (``mi.OptixDenoiser`` was observed to have
+    up to +/-1/255 run-to-run nondeterminism on ~0.6% of pixels for a real
+    scene at 512x512 in that same Step 5 run, even on the identical
+    GPU/driver within one process family) — an exact-equality assertion here
+    would be a flaky test, not a stronger guarantee.
     """
     root = tmp_path / "root"
     optical_a, _optical_b = _write_two_inputs(root)
@@ -1300,11 +1308,17 @@ def test_saved_denoised_session_viewer_final_matches_headless_session_replay(
     )
     mitsuba_stage_demo.main()
 
-    assert (tmp_path / "viewer.raw.png").exists()
-    assert (tmp_path / "headless.raw.png").exists()
-    viewer_pixels = np.asarray(mi.Bitmap(str(viewer_png)))
-    headless_pixels = np.asarray(mi.Bitmap(str(headless_png)))
-    assert np.array_equal(viewer_pixels, headless_pixels)
+    viewer_raw_png = tmp_path / "viewer.raw.png"
+    headless_raw_png = tmp_path / "headless.raw.png"
+    assert viewer_raw_png.exists()
+    assert headless_raw_png.exists()
+    viewer_raw_pixels = np.asarray(mi.Bitmap(str(viewer_raw_png)))
+    headless_raw_pixels = np.asarray(mi.Bitmap(str(headless_raw_png)))
+    assert np.array_equal(viewer_raw_pixels, headless_raw_pixels)
+
+    viewer_pixels = np.asarray(mi.Bitmap(str(viewer_png)), dtype=np.int32)
+    headless_pixels = np.asarray(mi.Bitmap(str(headless_png)), dtype=np.int32)
+    np.testing.assert_allclose(viewer_pixels, headless_pixels, atol=2)
 
 
 # -- Phase 4: optical mapping selection and canonical re-generation -----------------

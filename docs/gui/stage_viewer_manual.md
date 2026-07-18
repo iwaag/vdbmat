@@ -126,8 +126,9 @@ as `<output stem>.raw<suffix>` next to the denoised PNG. This checkbox is
 disabled unless the viewer itself was started with `--variant cuda_ad_rgb`
 (OptiX is CUDA-only); its hover hint states this. See "Reduce Noise with
 OptiX Denoising" in `README_QUICK.md` for when to reach for it and its
-reproducibility caveat (denoised output is pixel-reproducible only on the
-same GPU/driver; the raw sidecar is unconditionally reproducible). The
+reproducibility caveat (denoised output is only a close match, even on the
+same GPU/driver — OptiX has small run-to-run nondeterminism; the raw
+sidecar is exactly reproducible). The
 screenshot above predates this checkbox; it is a `gui_image_export`
 recapture target.
 
