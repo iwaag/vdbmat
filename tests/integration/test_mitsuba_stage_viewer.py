@@ -42,10 +42,12 @@ from mitsuba_stage import (  # noqa: E402
     stage_config_to_dict,
 )
 from mitsuba_stage_core import (  # noqa: E402
+    DenoiseVariantError,
     InputLoadError,
     InputSession,
     StageCore,
     TraversedPreviewScene,
+    _pixel_stats,
     _session_work_dir,
 )
 from mitsuba_stage_inputs import (  # noqa: E402
@@ -202,6 +204,131 @@ def test_stage_core_final_reprepare_uses_max_depth(tmp_path: Path) -> None:
     assert "max_depth=14" in preview_stats
     assert summary["render"]["max_depth"] == 14
     assert "max_depth=14" in stats
+
+
+def test_denoise_off_final_render_writes_no_raw_sidecar(tmp_path: Path) -> None:
+    volume = map_material_volume_to_optical(
+        homogeneous_transparent().volume, phase0_provisional_mapping()
+    )
+    optical_zarr = tmp_path / "optical.zarr"
+    write_volume(optical_zarr, volume)
+    stage = StageConfig(render=RenderSettings(width=8, height=8, spp=1, denoise=False))
+    core = StageCore(
+        optical_zarr,
+        tmp_path / "work",
+        preview_size=8,
+        preview_spp=1,
+        initial=stage,
+    )
+    output_png = tmp_path / "final.png"
+
+    stats = core.render_final(stage, output_png)
+
+    assert output_png.exists()
+    assert not output_png.with_name("final.raw.png").exists()
+    assert "denoise=optix" not in stats
+
+
+def test_denoise_requires_cuda_variant_for_final_and_settled_preview(
+    tmp_path: Path,
+) -> None:
+    volume = map_material_volume_to_optical(
+        homogeneous_transparent().volume, phase0_provisional_mapping()
+    )
+    optical_zarr = tmp_path / "optical.zarr"
+    write_volume(optical_zarr, volume)
+    stage = StageConfig(render=RenderSettings(width=8, height=8, spp=1, denoise=True))
+    core = StageCore(
+        optical_zarr,
+        tmp_path / "work",
+        preview_size=8,
+        preview_spp=1,
+        initial=replace(stage, render=replace(stage.render, denoise=False)),
+        variant="llvm_ad_rgb",
+    )
+
+    with pytest.raises(DenoiseVariantError):
+        core.render_final(stage, tmp_path / "final.png")
+    with pytest.raises(DenoiseVariantError):
+        core.render_preview(stage, spp=None)
+
+    # Interactive preview (explicit spp) is never denoised, so it is exempt
+    # from the variant guard even when the config asks for denoise.
+    pixels, stats, _route = core.render_preview(stage, spp=1)
+    assert pixels.shape == (8, 8, 3)
+    assert "denoise=optix" not in stats
+
+
+@pytest.mark.skipif(
+    "cuda_ad_rgb" not in mi.variants(), reason="requires a CUDA-capable host"
+)
+def test_denoise_cuda_final_render_writes_raw_and_denoised_matching_stats(
+    tmp_path: Path,
+) -> None:
+    volume = map_material_volume_to_optical(
+        homogeneous_transparent().volume, phase0_provisional_mapping()
+    )
+    optical_zarr = tmp_path / "optical.zarr"
+    write_volume(optical_zarr, volume)
+    stage = StageConfig(render=RenderSettings(width=8, height=8, spp=4, denoise=True))
+    core = StageCore(
+        optical_zarr,
+        tmp_path / "work",
+        preview_size=8,
+        preview_spp=4,
+        initial=replace(stage, render=replace(stage.render, denoise=False)),
+        variant="cuda_ad_rgb",
+    )
+    output_png = tmp_path / "final.png"
+    raw_png = tmp_path / "final.raw.png"
+
+    # Deterministic (same session/config/seed) render of the raw pixels,
+    # independent of render_final's internal bitmap writing, so the
+    # comparison below isn't distorted by the lossy float->8-bit PNG
+    # round-trip write_bitmap performs.
+    session = core._session
+    core._ensure_final(session, stage.render)
+    direct_image = core._render(
+        session.base_final, session.volume, stage, stage.render.spp, session.seed
+    )
+    expected_raw_stats = _pixel_stats(
+        np.asarray(direct_image, dtype=np.float32), stage.render.max_depth
+    )
+
+    stats = core.render_final(stage, output_png)
+
+    assert output_png.exists()
+    assert raw_png.exists()
+    assert stats == f"{expected_raw_stats} denoise=optix"
+    raw_pixels = np.asarray(mi.Bitmap(str(raw_png)), dtype=np.float32)
+    denoised_pixels = np.asarray(mi.Bitmap(str(output_png)), dtype=np.float32)
+    assert not np.array_equal(raw_pixels, denoised_pixels)
+
+
+@pytest.mark.skipif(
+    "cuda_ad_rgb" not in mi.variants(), reason="requires a CUDA-capable host"
+)
+def test_denoise_cuda_applies_only_to_settled_preview(tmp_path: Path) -> None:
+    volume = map_material_volume_to_optical(
+        homogeneous_transparent().volume, phase0_provisional_mapping()
+    )
+    optical_zarr = tmp_path / "optical.zarr"
+    write_volume(optical_zarr, volume)
+    stage = StageConfig(render=RenderSettings(width=8, height=8, spp=4, denoise=True))
+    core = StageCore(
+        optical_zarr,
+        tmp_path / "work",
+        preview_size=8,
+        preview_spp=4,
+        initial=replace(stage, render=replace(stage.render, denoise=False)),
+        variant="cuda_ad_rgb",
+    )
+
+    _pixels, interactive_stats, _route = core.render_preview(stage, spp=1)
+    assert "denoise=optix" not in interactive_stats
+
+    _pixels, settled_stats, _route = core.render_preview(stage, spp=None)
+    assert "denoise=optix" in settled_stats
 
 
 def test_loaded_stage_preset_drives_preview_and_final_render(tmp_path: Path) -> None:

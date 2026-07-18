@@ -49,6 +49,76 @@ def _pixel_stats(pixels: np.ndarray, max_depth: int) -> str:
     )
 
 
+_CUDA_VARIANT_PREFIX = "cuda"
+
+
+class DenoiseVariantError(Exception):
+    """``render.denoise`` was requested with a non-CUDA Mitsuba variant.
+
+    ``mi.OptixDenoiser`` is CUDA-only; this repo's "no silent approximation"
+    principle means a CPU (``llvm_ad_rgb``) request must fail explicitly
+    rather than quietly rendering without denoising.
+    """
+
+
+def require_denoise_variant(variant: str) -> None:
+    if not variant.startswith(_CUDA_VARIANT_PREFIX):
+        raise DenoiseVariantError(
+            "render.denoise requires a cuda_ad_rgb-family Mitsuba variant "
+            f"(mi.OptixDenoiser is CUDA-only); got variant={variant!r}"
+        )
+
+
+def denoise_image(
+    mi: ModuleType,
+    image: object,
+    width: int,
+    height: int,
+    cache: dict[tuple[int, int], object],
+) -> object:
+    """Apply ``mi.OptixDenoiser`` to a rendered image.
+
+    ``cache`` holds one denoiser per ``(width, height)``, reused across
+    calls (denoiser construction is per-resolution, not per-render).
+    """
+    key = (width, height)
+    denoiser = cache.get(key)
+    if denoiser is None:
+        denoiser = mi.OptixDenoiser(input_size=[width, height])
+        cache[key] = denoiser
+    return denoiser(image)
+
+
+def finalize_render_image(
+    mi: ModuleType,
+    image: object,
+    render: RenderSettings,
+    output_png: Path,
+    stats: str,
+    denoiser_cache: dict[tuple[int, int], object],
+) -> str:
+    """Write ``image`` to ``output_png``, honoring ``render.denoise``.
+
+    When ``render.denoise`` is false, writes ``image`` unchanged and returns
+    ``stats`` unchanged (pixel-identical to pre-denoise behavior). When true,
+    writes the raw image first (as ``<stem>.raw<suffix>``, so PIXELSTATS —
+    computed by the caller from the raw pixels — stays a science-track
+    regression signal unaffected by denoising), then writes the denoised
+    result to ``output_png`` and appends ``" denoise=optix"`` to ``stats``.
+    Raises :class:`DenoiseVariantError` if ``mi.variant()`` is not a CUDA
+    variant.
+    """
+    if not render.denoise:
+        mi.util.write_bitmap(str(output_png), image, write_async=False)
+        return stats
+    require_denoise_variant(mi.variant())
+    raw_png = output_png.with_name(f"{output_png.stem}.raw{output_png.suffix}")
+    mi.util.write_bitmap(str(raw_png), image, write_async=False)
+    denoised = denoise_image(mi, image, render.width, render.height, denoiser_cache)
+    mi.util.write_bitmap(str(output_png), denoised, write_async=False)
+    return f"{stats} denoise=optix"
+
+
 StructureKey = tuple[bool, str, bool, str, bool, bool, bool, int]
 FinalRenderKey = tuple[int, int, int]
 
@@ -454,6 +524,7 @@ class StageCore:
         self.mi = _load_mitsuba(variant)
         self.session_generation = 0
         self._session_seq = itertools.count()
+        self._denoiser_cache: dict[tuple[int, int], object] = {}
         self._session = self._build_session(optical_zarr, initial, seed)
 
     @property
@@ -550,7 +621,14 @@ class StageCore:
     def render_preview(
         self, config: StageConfig, spp: int | None = None
     ) -> tuple[np.ndarray, str, str]:
-        """Render a preview; return (uint8 sRGB image, stats, update route)."""
+        """Render a preview; return (uint8 sRGB image, stats, update route).
+
+        Denoising (``config.render.denoise``) applies only to the settled
+        preview (``spp is None``, i.e. the caller did not ask for a specific
+        interactive sample count) — never to the low-spp interactive preview,
+        to keep drag-time responsiveness unaffected. Stats are always
+        computed from the raw (pre-denoise) pixels.
+        """
         preview_config = _preview_stage_config(
             config, self.preview_size, self.preview_spp
         )
@@ -560,6 +638,16 @@ class StageCore:
         stats = _pixel_stats(
             np.asarray(image, dtype=np.float32), preview_config.render.max_depth
         )
+        if spp is None and preview_config.render.denoise:
+            require_denoise_variant(self.mi.variant())
+            image = denoise_image(
+                self.mi,
+                image,
+                preview_config.render.width,
+                preview_config.render.height,
+                self._denoiser_cache,
+            )
+            stats = f"{stats} denoise=optix"
         bitmap = self.mi.util.convert_to_bitmap(image)
         return np.asarray(bitmap), stats, route
 
@@ -569,7 +657,10 @@ class StageCore:
         Reads ``self._session`` once, at call time, so a job already queued
         on the render worker always renders whichever session is current
         when it actually runs (not whichever was current when it was
-        submitted).
+        submitted). When ``config.render.denoise`` is set, also writes the
+        raw (pre-denoise) image as ``<output_png stem>.raw<suffix>`` and
+        computes PIXELSTATS from that raw image (see
+        :func:`finalize_render_image`).
         """
         session = self._session
         self._ensure_final(session, config.render)
@@ -577,9 +668,11 @@ class StageCore:
             session.base_final, session.volume, config, config.render.spp, session.seed
         )
         output_png.parent.mkdir(parents=True, exist_ok=True)
-        self.mi.util.write_bitmap(str(output_png), image, write_async=False)
-        return _pixel_stats(
+        stats = _pixel_stats(
             np.asarray(image, dtype=np.float32), config.render.max_depth
+        )
+        return finalize_render_image(
+            self.mi, image, config.render, output_png, stats, self._denoiser_cache
         )
 
     @staticmethod
