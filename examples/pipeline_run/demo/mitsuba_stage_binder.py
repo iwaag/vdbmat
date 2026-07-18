@@ -79,6 +79,7 @@ class StageBinder:
         *,
         input_tab: Callable[[object], None] | None = None,
         preset_tab: Callable[[object], None] | None = None,
+        variant: str = "llvm_ad_rgb",
     ) -> None:
         self.base = base
         self.dirty: set[str] = set()
@@ -117,6 +118,13 @@ class StageBinder:
                 min=1,
                 step=1,
                 hint="Higher values allow longer light paths and can render slower.",
+            )
+            self.denoise = gui.add_checkbox(
+                "denoise (OptiX)",
+                base.render.denoise,
+                disabled=not variant.startswith("cuda"),
+                hint="Applies mi.OptixDenoiser to final render and settled "
+                "preview. Requires a cuda_ad_rgb-family variant.",
             )
         with self.tabs.add_tab("Backdrop"):
             self.backdrop_enabled = gui.add_checkbox("enabled", base.backdrop.enabled)
@@ -248,6 +256,7 @@ class StageBinder:
             self.height,
             self.spp,
             self.max_depth,
+            self.denoise,
             self.backdrop_enabled,
             self.backdrop_pattern,
             self.floor_enabled,
@@ -318,6 +327,7 @@ class StageBinder:
                 (self.height, config.render.height),
                 (self.spp, config.render.spp),
                 (self.max_depth, config.render.max_depth),
+                (self.denoise, config.render.denoise),
                 (self.backdrop_enabled, config.backdrop.enabled),
                 (self.backdrop_pattern, config.backdrop.pattern),
                 (
@@ -449,6 +459,7 @@ class StageBinder:
                 height=int(self.height.value),
                 spp=int(self.spp.value),
                 max_depth=int(self.max_depth.value),
+                denoise=bool(self.denoise.value),
             ),
             backdrop=BackdropSettings(
                 enabled=self.backdrop_enabled.value,

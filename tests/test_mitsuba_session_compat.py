@@ -158,6 +158,19 @@ def test_effective_stage_render_difference_is_detected(tmp_path: Path) -> None:
     assert fields == {"stage.effective_digest"}
 
 
+def test_denoise_only_difference_is_detected(tmp_path: Path) -> None:
+    config_a = StageConfig(render=RenderSettings(denoise=False))
+    config_b = StageConfig(render=RenderSettings(denoise=True))
+    a = _write(tmp_path / "a.session.json", _bundle_session(config=config_a))
+    b = _write(tmp_path / "b.session.json", _bundle_session(config=config_b))
+
+    report = compat.compare_sessions(a, b)
+
+    assert report.scientifically_equal is False
+    fields = {field for field, _a, _b in report.differences}
+    assert fields == {"stage.effective_digest"}
+
+
 def test_seed_difference_is_detected(tmp_path: Path) -> None:
     a = _write(tmp_path / "a.session.json", _bundle_session(seed=7))
     b = _write(tmp_path / "b.session.json", _bundle_session(seed=8))

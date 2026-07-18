@@ -58,6 +58,7 @@ directory the GUI's Input tab scans for sibling bundles/stores to switch
 to via Load/Rebuild; see :mod:`mitsuba_stage_inputs` for the catalog
 contract and containment rules.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -452,6 +453,7 @@ def _resolve_viewer_startup(args: argparse.Namespace, work_dir: Path) -> ViewerS
 _NO_PRESETS = "(no presets found)"
 _AS_IS_MAPPING = "(bundle optical as-is)"
 
+
 def _fit_preview_to_aspect(pixels: np.ndarray, viewport_aspect: float) -> np.ndarray:
     """Pad an image so viser's stretched background preserves its aspect ratio."""
     height, width = pixels.shape[:2]
@@ -566,6 +568,7 @@ class ViewerApp:
             self._on_stage_change,
             input_tab=self._build_input_tab,
             preset_tab=self._build_preset_tab,
+            variant=startup.variant,
         )
         self._update_effective_state()
 

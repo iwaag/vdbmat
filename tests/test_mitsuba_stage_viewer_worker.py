@@ -100,8 +100,12 @@ class _FakeGui:
         self.number_options[label] = options
         return _FakeHandle(initial_value)
 
-    def add_checkbox(self, _label: str, initial_value: object) -> _FakeHandle:
-        return _FakeHandle(initial_value)
+    def add_checkbox(
+        self, _label: str, initial_value: object, **options: object
+    ) -> _FakeHandle:
+        handle = _FakeHandle(initial_value)
+        handle.disabled = bool(options.get("disabled", False))
+        return handle
 
     def add_dropdown(
         self, _label: str, _options: object, *, initial_value: object
@@ -451,6 +455,47 @@ def test_stage_binder_max_depth_widget_and_preset_round_trip(
     assert stage_config_from_json(preset_path) == current
 
 
+def test_stage_binder_denoise_widget_and_preset_round_trip(tmp_path: Path) -> None:
+    gui = _FakeGui()
+    base = StageConfig(render=RenderSettings(denoise=True))
+    binder = StageBinder(SimpleNamespace(gui=gui), base, lambda: None)
+
+    assert binder.denoise.value is True
+    assert binder.current() == base
+
+    binder.denoise.set_value(False)
+    current = binder.current()
+
+    assert current.render.denoise is False
+
+    preset_path = tmp_path / "viewer.stage.json"
+    StageCore.save_preset(current, preset_path)
+
+    assert stage_config_from_json(preset_path) == current
+
+
+def test_stage_binder_denoise_disabled_unless_cuda_variant() -> None:
+    llvm_binder = StageBinder(
+        SimpleNamespace(gui=_FakeGui()), StageConfig(), lambda: None
+    )
+    default_binder = StageBinder(
+        SimpleNamespace(gui=_FakeGui()),
+        StageConfig(),
+        lambda: None,
+        variant="llvm_ad_rgb",
+    )
+    cuda_binder = StageBinder(
+        SimpleNamespace(gui=_FakeGui()),
+        StageConfig(),
+        lambda: None,
+        variant="cuda_ad_rgb",
+    )
+
+    assert llvm_binder.denoise.disabled is True
+    assert default_binder.denoise.disabled is True
+    assert cuda_binder.denoise.disabled is False
+
+
 def test_stage_binder_replace_config_is_exact_and_suppresses_callbacks() -> None:
     gui = _FakeGui()
     changes: list[str] = []
@@ -464,7 +509,9 @@ def test_stage_binder_replace_config_is_exact_and_suppresses_callbacks() -> None
     changes.clear()
 
     replacement = StageConfig(
-        render=RenderSettings(width=640, height=384, spp=24, max_depth=17),
+        render=RenderSettings(
+            width=640, height=384, spp=24, max_depth=17, denoise=True
+        ),
         backdrop=BackdropSettings(
             pattern="solid",
             distance_factor=13.141592,

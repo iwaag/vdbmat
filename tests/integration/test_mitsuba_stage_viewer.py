@@ -62,6 +62,8 @@ from mitsuba_viewer_session import (  # noqa: E402
     SessionMappingRef,
     ViewerSessionError,
     create_viewer_session,
+    resolve_viewer_session,
+    viewer_session_from_json,
     write_viewer_session,
 )
 
@@ -1136,6 +1138,36 @@ def test_saved_session_viewer_final_matches_headless_session_replay(
     out = capsys.readouterr().out
     assert f"seed={seed}" in out
     assert "max_depth=17" in out
+
+
+def test_denoise_recorded_in_saved_session_and_survives_headless_resolve(
+    tmp_path: Path,
+) -> None:
+    """``render.denoise`` flows session save -> resolve unchanged (denoise plan Step 3).
+
+    Full pixel-identical viewer/headless replay of a *denoised* final render
+    is exercised once ``mitsuba_stage_demo.py``'s own denoise application
+    lands (plan Step 4); here we only confirm the session mechanism itself
+    (save, digest, resolve) carries ``render.denoise`` through unchanged,
+    matching ``test_saved_session_viewer_final_matches_headless_session_replay``
+    above but for the ``render.denoise`` field specifically.
+    """
+    root = tmp_path / "root"
+    _write_two_inputs(root)
+    stage = StageConfig(render=RenderSettings(width=12, height=12, spp=2, denoise=True))
+    seed = 4242
+    session = create_viewer_session(
+        resolve_candidate(root, Path("a.zarr")), stage, "cuda_ad_rgb", seed
+    )
+    session_path = tmp_path / "saved.session.json"
+    write_viewer_session(session_path, session)
+
+    reloaded = viewer_session_from_json(session_path)
+    resolved = resolve_viewer_session(reloaded, root)
+
+    assert reloaded.stage_config.render.denoise is True
+    assert resolved.stage_config.render.denoise is True
+    assert resolved.variant == "cuda_ad_rgb"
 
 
 # -- Phase 4: optical mapping selection and canonical re-generation -----------------
