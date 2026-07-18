@@ -140,3 +140,10 @@ def test_cli_max_depth_override_wins_and_none_preserves_preset() -> None:
 
     assert preset.with_cli_overrides().render.max_depth == 20
     assert preset.with_cli_overrides(max_depth=6).render.max_depth == 6
+
+
+def test_cli_denoise_override_wins_and_none_preserves_preset() -> None:
+    preset = StageConfig(render=RenderSettings(denoise=True))
+
+    assert preset.with_cli_overrides().render.denoise is True
+    assert preset.with_cli_overrides(denoise=False).render.denoise is False

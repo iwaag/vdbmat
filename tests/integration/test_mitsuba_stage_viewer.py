@@ -1170,6 +1170,143 @@ def test_denoise_recorded_in_saved_session_and_survives_headless_resolve(
     assert resolved.variant == "cuda_ad_rgb"
 
 
+def test_demo_cli_denoise_requires_cuda_variant(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    volume = map_material_volume_to_optical(
+        homogeneous_transparent().volume, phase0_provisional_mapping()
+    )
+    optical_zarr = tmp_path / "optical.zarr"
+    write_volume(optical_zarr, volume)
+    output_png = tmp_path / "out.png"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "mitsuba_stage_demo",
+            str(optical_zarr),
+            str(output_png),
+            "--width",
+            "8",
+            "--height",
+            "8",
+            "--spp",
+            "1",
+            "--variant",
+            "llvm_ad_rgb",
+            "--denoise",
+        ],
+    )
+
+    with pytest.raises(mitsuba_stage_core.DenoiseVariantError):
+        mitsuba_stage_demo.main()
+
+
+@pytest.mark.skipif(
+    "cuda_ad_rgb" not in mi.variants(), reason="requires a CUDA-capable host"
+)
+def test_demo_cli_denoise_writes_raw_and_denoised_with_stats_suffix(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    volume = map_material_volume_to_optical(
+        homogeneous_transparent().volume, phase0_provisional_mapping()
+    )
+    optical_zarr = tmp_path / "optical.zarr"
+    write_volume(optical_zarr, volume)
+    output_png = tmp_path / "out.png"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "mitsuba_stage_demo",
+            str(optical_zarr),
+            str(output_png),
+            "--width",
+            "8",
+            "--height",
+            "8",
+            "--spp",
+            "4",
+            "--variant",
+            "cuda_ad_rgb",
+            "--denoise",
+        ],
+    )
+
+    mitsuba_stage_demo.main()
+
+    raw_png = tmp_path / "out.raw.png"
+    assert output_png.exists()
+    assert raw_png.exists()
+    raw_pixels = np.asarray(mi.Bitmap(str(raw_png)))
+    denoised_pixels = np.asarray(mi.Bitmap(str(output_png)))
+    assert not np.array_equal(raw_pixels, denoised_pixels)
+    out = capsys.readouterr().out
+    assert "denoise=optix" in out
+
+
+@pytest.mark.skipif(
+    "cuda_ad_rgb" not in mi.variants(), reason="requires a CUDA-capable host"
+)
+def test_saved_denoised_session_viewer_final_matches_headless_session_replay(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Denoised counterpart of the viewer/headless session-replay match test.
+
+    Closes the pixel-identical check deferred in Step 3's report (denoise
+    plan): with ``mitsuba_stage_demo.py``'s ``render_stage()`` now wired to
+    ``finalize_render_image`` (Step 4), a denoised viewer final render and a
+    denoised headless ``--session`` replay of the same session must still
+    match pixel-for-pixel on the same GPU/driver.
+    """
+    root = tmp_path / "root"
+    optical_a, _optical_b = _write_two_inputs(root)
+    stage = StageConfig(render=RenderSettings(width=12, height=12, spp=4, denoise=True))
+    seed = 4242
+    session = create_viewer_session(
+        resolve_candidate(root, Path("a.zarr")), stage, "cuda_ad_rgb", seed
+    )
+    session_path = tmp_path / "saved.session.json"
+    write_viewer_session(session_path, session)
+
+    viewer_png = tmp_path / "viewer.png"
+    core = StageCore(
+        optical_a,
+        tmp_path / "viewer-work",
+        preview_size=12,
+        preview_spp=1,
+        initial=stage,
+        seed=seed,
+        variant="cuda_ad_rgb",
+    )
+    core.render_final(stage, viewer_png)
+
+    headless_png = tmp_path / "headless.png"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "mitsuba_stage_demo",
+            "--session",
+            str(session_path),
+            "--input-root",
+            str(root),
+            "--output-png",
+            str(headless_png),
+        ],
+    )
+    mitsuba_stage_demo.main()
+
+    assert (tmp_path / "viewer.raw.png").exists()
+    assert (tmp_path / "headless.raw.png").exists()
+    viewer_pixels = np.asarray(mi.Bitmap(str(viewer_png)))
+    headless_pixels = np.asarray(mi.Bitmap(str(headless_png)))
+    assert np.array_equal(viewer_pixels, headless_pixels)
+
+
 # -- Phase 4: optical mapping selection and canonical re-generation -----------------
 
 

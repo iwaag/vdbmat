@@ -117,6 +117,20 @@ are render-transport settings; changing `max depth` triggers a scene
 rebuild (Mitsuba does not expose it through live traversal), while the
 others take effect on the next render pass.
 
+Below max depth is a **denoise (OptiX)** checkbox (default off). When
+checked, `mi.OptixDenoiser` is applied to the final render and to the
+settled preview (never to the low-spp interactive preview, to keep drag-time
+responsiveness unaffected); PIXELSTATS is always computed from the raw
+(pre-denoise) image, and a final render additionally writes that raw image
+as `<output stem>.raw<suffix>` next to the denoised PNG. This checkbox is
+disabled unless the viewer itself was started with `--variant cuda_ad_rgb`
+(OptiX is CUDA-only); its hover hint states this. See "Reduce Noise with
+OptiX Denoising" in `README_QUICK.md` for when to reach for it and its
+reproducibility caveat (denoised output is pixel-reproducible only on the
+same GPU/driver; the raw sidecar is unconditionally reproducible). The
+screenshot above predates this checkbox; it is a `gui_image_export`
+recapture target.
+
 ### Backdrop
 
 ![Backdrop tab](images/backdrop-panel.png)

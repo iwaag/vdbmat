@@ -266,6 +266,7 @@ class StageConfig:
         spp: int | None = None,
         max_depth: int | None = None,
         checker_scale: int | None = None,
+        denoise: bool | None = None,
     ) -> StageConfig:
         """Apply explicit CLI arguments on top of this config (CLI wins)."""
         config = self
@@ -276,6 +277,7 @@ class StageConfig:
                 ("height", height),
                 ("spp", spp),
                 ("max_depth", max_depth),
+                ("denoise", denoise),
             )
             if value is not None
         }

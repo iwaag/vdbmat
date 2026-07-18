@@ -22,8 +22,8 @@ Stage construction lives in the sibling module :mod:`mitsuba_stage`
 A stage-config JSON preset (``*.stage.json``, see
 ``examples/pipeline_run/demo/presets/``) can override lights, camera, and
 backdrop/floor patterns; running without one reproduces the built-in defaults.
-Explicit ``--width/--height/--spp/--max-depth/--checker-scale`` arguments win
-over the preset.
+Explicit ``--width/--height/--spp/--max-depth/--checker-scale/--denoise/
+--no-denoise`` arguments win over the preset.
 
 Invoke on the host (no Docker needed for Mitsuba):
 
@@ -31,7 +31,8 @@ Invoke on the host (no Docker needed for Mitsuba):
         examples/pipeline_run/demo/mitsuba_stage_demo.py -- \
         OPTICAL_ZARR OUTPUT_PNG [--stage-config PRESET.stage.json] \
         [--width 512] [--height 512] [--spp 128] [--max-depth 8] \
-        [--checker-scale 8] [--variant llvm_ad_rgb|cuda_ad_rgb] [--seed SEED]
+        [--checker-scale 8] [--denoise | --no-denoise] \
+        [--variant llvm_ad_rgb|cuda_ad_rgb] [--seed SEED]
 
 ``OPTICAL_ZARR`` is an ``optical.zarr`` bundle written by ``vdbmat run``.
 ``OUTPUT_PNG`` is where the rendered PNG is written; the exterior/interior PLY
@@ -39,7 +40,12 @@ meshes, ``capabilities.json``, and ``scene-summary.json`` that
 ``prepare_mitsuba_scene()`` writes as a side effect land next to it, under
 ``<OUTPUT_PNG stem>_scene/``. The script prints ``PIXELSTATS`` (min/max/mean/std of
 the rendered pixels), the same cheap headless regression signal used by the
-Blender demo scripts in this directory.
+Blender demo scripts in this directory. With ``--denoise`` (requires
+``--variant cuda_ad_rgb``), the raw (pre-denoise) image is additionally
+written as ``<OUTPUT_PNG stem>.raw<OUTPUT_PNG suffix>`` and PIXELSTATS is
+computed from that raw image, so the science-track regression signal stays
+denoise-independent; ``OUTPUT_PNG`` itself holds the denoised result and the
+printed line gets a trailing ``denoise=optix``.
 
 This script also replays a ``mitsuba_viewer_session`` manifest (see
 :mod:`mitsuba_viewer_session` and :mod:`mitsuba_stage_viewer`) headlessly, using
@@ -55,10 +61,11 @@ digest, or effective config:
 Session replay resolves the input/preset references and verifies every
 declared digest before rendering; it cannot be combined with the positional
 ``OPTICAL_ZARR OUTPUT_PNG`` form, ``--stage-config``, or any of the
-width/height/spp/max-depth/checker-scale overrides, since the manifest is
-already a fully-resolved effective config. An explicit ``--variant``/``--seed``
-is accepted only if it matches the manifest's value, to catch stale command
-lines rather than silently overriding what "session replay" means.
+width/height/spp/max-depth/checker-scale/denoise overrides, since the
+manifest is already a fully-resolved effective config (including
+``render.denoise``). An explicit ``--variant``/``--seed`` is accepted only if
+it matches the manifest's value, to catch stale command lines rather than
+silently overriding what "session replay" means.
 """
 
 from __future__ import annotations
@@ -70,6 +77,7 @@ from types import ModuleType
 
 import numpy as np
 from mitsuba_stage import StageConfig, apply_stage, stage_config_from_json
+from mitsuba_stage_core import finalize_render_image
 from mitsuba_stage_inputs import resolve_input_root
 from mitsuba_stage_mappings import MappingCatalogError, resolve_mapping_root
 from mitsuba_stage_presets import resolve_preset_root
@@ -85,6 +93,11 @@ from vdbmat.core.volumes import OpticalPropertyVolume
 from vdbmat.exporters.mitsuba import MitsubaExportConfig, prepare_mitsuba_scene
 from vdbmat.io.zarr import read_volume
 from vdbmat.pipeline import sha256_file
+
+# Per-resolution mi.OptixDenoiser cache, shared across render_stage() calls in
+# this process (a single CLI invocation renders once, but this also lets
+# repeated in-process calls, e.g. from tests, reuse a denoiser).
+_denoiser_cache: dict[tuple[int, int], object] = {}
 
 
 def _parse_args() -> argparse.Namespace:
@@ -131,6 +144,20 @@ def _parse_args() -> argparse.Namespace:
         default=None,
         help="override the number of checkerboard tiles across both stage "
         "planes (default: preset value or 8)",
+    )
+    parser.add_argument(
+        "--denoise",
+        dest="denoise",
+        action="store_true",
+        default=None,
+        help="apply mi.OptixDenoiser to the final render (default: preset "
+        "value or False); requires --variant cuda_ad_rgb",
+    )
+    parser.add_argument(
+        "--no-denoise",
+        dest="denoise",
+        action="store_false",
+        help="explicitly disable denoise, overriding a preset that enables it",
     )
     parser.add_argument(
         "--variant",
@@ -228,11 +255,12 @@ def _parse_args() -> argparse.Namespace:
                 args.spp,
                 args.max_depth,
                 args.checker_scale,
+                args.denoise,
             )
         ):
             parser.error(
-                "--width/--height/--spp/--max-depth/--checker-scale cannot be "
-                "used with --session"
+                "--width/--height/--spp/--max-depth/--checker-scale/"
+                "--denoise/--no-denoise cannot be used with --session"
             )
     return args
 
@@ -282,17 +310,19 @@ def render_stage(
     image = mi.render(scene, seed=config.seed, spp=config.spp)
 
     output_png.parent.mkdir(parents=True, exist_ok=True)
-    mi.util.write_bitmap(str(output_png), image, write_async=False)
-
     pixels = np.asarray(image, dtype=np.float32)
-    print(
-        f"PIXELSTATS variant={config.variant} seed={config.seed} "
+    stats = (
+        f"variant={config.variant} seed={config.seed} "
         f"max_depth={config.max_depth} "
         f"min={float(np.min(pixels)):.6g} "
         f"max={float(np.max(pixels)):.6g} "
         f"mean={float(np.mean(pixels)):.6g} "
         f"std={float(np.std(pixels)):.6g}"
     )
+    stats = finalize_render_image(
+        mi, image, stage.render, output_png, stats, _denoiser_cache
+    )
+    print(f"PIXELSTATS {stats}")
     return pixels
 
 
@@ -309,6 +339,7 @@ def _resolve_legacy(
         spp=args.spp,
         max_depth=args.max_depth,
         checker_scale=args.checker_scale,
+        denoise=args.denoise,
     )
     variant = args.variant or "llvm_ad_rgb"
     seed = MitsubaExportConfig().seed if args.seed is None else args.seed

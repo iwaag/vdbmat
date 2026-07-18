@@ -31,6 +31,38 @@ def test_parse_args_accepts_max_depth(monkeypatch: pytest.MonkeyPatch) -> None:
     assert args.max_depth == 14
 
 
+def test_parse_args_denoise_defaults_to_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(sys, "argv", ["mitsuba_stage_demo", "input.zarr", "output.png"])
+
+    args = mitsuba_stage_demo._parse_args()
+
+    assert args.denoise is None
+
+
+def test_parse_args_accepts_denoise_flag(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["mitsuba_stage_demo", "input.zarr", "output.png", "--denoise"],
+    )
+
+    args = mitsuba_stage_demo._parse_args()
+
+    assert args.denoise is True
+
+
+def test_parse_args_accepts_no_denoise_flag(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["mitsuba_stage_demo", "input.zarr", "output.png", "--no-denoise"],
+    )
+
+    args = mitsuba_stage_demo._parse_args()
+
+    assert args.denoise is False
+
+
 def test_parse_args_accepts_seed_in_legacy_mode(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -159,6 +191,29 @@ def test_parse_args_session_mode_rejects_render_overrides(
             "out.png",
             flag,
             "4",
+        ],
+    )
+
+    with pytest.raises(SystemExit):
+        mitsuba_stage_demo._parse_args()
+
+
+@pytest.mark.parametrize("flag", ["--denoise", "--no-denoise"])
+def test_parse_args_session_mode_rejects_denoise_overrides(
+    monkeypatch: pytest.MonkeyPatch, flag: str
+) -> None:
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "mitsuba_stage_demo",
+            "--session",
+            "s.json",
+            "--input-root",
+            "root",
+            "--output-png",
+            "out.png",
+            flag,
         ],
     )
 
@@ -538,6 +593,7 @@ def test_main_propagates_effective_max_depth_to_export_and_log(
         spp=None,
         max_depth=cli_max_depth,
         checker_scale=None,
+        denoise=None,
         variant="llvm_ad_rgb",
         seed=None,
         session=None,
